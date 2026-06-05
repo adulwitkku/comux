@@ -1,0 +1,15 @@
+{
+  "name": "cmux-orchestrator-harness",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Local-first AI orchestrator harness that runs inside cmux",
+  "scripts": {
+    "smoke:m1": "bun run scripts/smoke-m1.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}

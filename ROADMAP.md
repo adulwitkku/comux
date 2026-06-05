@@ -39,10 +39,14 @@ See `CONTEXT.md` for the glossary of every capitalised term below.
 
 ## Milestones (ordered by "prove the riskiest thing first")
 
-### M1 — Control one real Agent (the make-or-break spike)
-Run Claude Code in a visible cmux pane via `Bun.spawn`, seeded with a task through its
-launch argument. Capture exit code, apply a watchdog timeout, and `git commit` when the
-step completes. If this is not solid, nothing else matters — build it first.
+### M1 — Control one real Agent (the make-or-break spike) — ✅ implemented & validated
+Run an Agent in a visible cmux pane, seeded with a task through its launch command. Capture
+the exit code, apply a silence watchdog, and `git commit` when the step completes.
+
+Built on cmux CLI primitives, not node-pty (ADR-0007): `src/cmux.ts` (cmux wrapper),
+`src/agent-runner.ts` (`runAgentStep` + watchdog), `src/git.ts` (`checkpoint`). Proven
+end-to-end against the real cmux with `bun run smoke:m1` — completion + exit code capture,
+git checkpoint, and stuck-detection all pass.
 
 ### M2 — Thin Orchestrator
 Connect to local Ollama (`gemma4:12b`). Turn natural-language input into a validated task
