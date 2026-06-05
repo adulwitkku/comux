@@ -67,12 +67,20 @@ If a file-explorer / image-rendering view is still wanted, build a Bun web app a
 as a cmux browser surface (`cmux browser open http://localhost:<port>`). Port is
 configurable, not hardcoded.
 
-## Open questions (not yet resolved)
+## Resolved details
 
-- The exact JSON schema for the task spec, and how to force `gemma4:12b` to always emit
-  valid JSON (structured output / grammar).
-- Watchdog timeout duration, and how to distinguish "thinking" from "genuinely stuck".
-- Who ticks the PLAN.md checklist — the Harness, the Agent, or the Orchestrator.
+- **Task spec schema** — minimal `{reply, task}`, exactly one field set; names the work,
+  not the Agent. (ADR-0006)
+- **PLAN.md checklist** — the dispatched **Agent** ticks its own items; git remains the
+  source of truth regardless. (ADR-0002)
+- **Watchdog timeout** — a silence timer: it resets on every new line of Agent output and
+  fires only after N seconds of *no* output (≠ a total job timeout).
+
+## Open sub-questions (deferred to implementation)
+
+- How to force `gemma4:12b` to always emit valid JSON (structured output / grammar-
+  constrained decoding).
+- The watchdog's `N` (silence threshold) and how to distinguish "thinking" from "stuck".
 
 ## Stack
 

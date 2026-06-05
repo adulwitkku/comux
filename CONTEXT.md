@@ -22,8 +22,10 @@ Cursor, Antigravity). The "hands" of the system.
 _Avoid_: Worker, CLI
 
 **Task spec**:
-The structured output of the Orchestrator: `{thought, target_agent, command_string}`.
-The only artifact the Orchestrator is responsible for producing.
+The minimal structured output of the Orchestrator: one JSON object `{reply, task}` with
+exactly one field set — `reply` (the Orchestrator answers the user directly) or `task` (a
+natural-language instruction to dispatch). It names WHAT to do, never WHO does it — the
+Scheduler picks the Agent. The only artifact the Orchestrator is responsible for producing.
 
 **Handover**:
 The transfer of an in-progress job from a failed/exhausted Agent to the next Agent in
