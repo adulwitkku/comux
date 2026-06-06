@@ -84,9 +84,9 @@ checkpoint committed. **Note:** for M3 the human gate is a *per-dispatch* confir
 once, then run autonomously" lands with the autonomous multi-step PLAN.md walk in M4. Agents
 ticking the checklist is deferred to M4 too.
 
-### M3.5 — Autonomous verified PLAN-walk (single Agent) — ⭐ the real next milestone / MVP
-The keystone the original plan skipped: today `runTurn` is single-shot (one parse → one
-dispatch → one checkpoint), and nothing authors a multi-step PLAN.md. M3.5 closes that gap
+### M3.5 — Autonomous verified PLAN-walk (single Agent) — ✅ implemented; live walk pending
+The keystone the original plan skipped: `runTurn` used to be single-shot (one parse → one
+dispatch → one checkpoint), and nothing authored a multi-step PLAN.md. M3.5 closes that gap
 with a **single** Agent and no Scheduler:
 
 1. **Plan dispatch** — a capable Agent decomposes the request into Steps, each with a frozen
@@ -98,8 +98,14 @@ with a **single** Agent and no Scheduler:
 
 This delivers standalone value at N=1 (autonomous, check-verified, git-safe, visible coding —
 no second subscription needed) and is the prerequisite for everything below: there is nothing
-to hand over or schedule until a multi-Step walk exists. Demote the Orchestrator to an optional
-front-door here (ADR-0010).
+to hand over or schedule until a multi-Step walk exists.
+
+Implemented in `src/plan.ts` (PLAN.md format + parser + tick + the plan/step prompts),
+`src/check.ts` (the Acceptance-check runner, confined per ADR-0005), and `src/harness.ts`
+(`runTurn` → `planJob` → `walkPlan`). The deterministic core (parse / tick / check) is gated by
+`bun run smoke:m3`; the Agent-driven plan→walk loop still needs an end-to-end run against a live
+cmux + Ollama + `pi`. Still open: demoting the Orchestrator to an optional front-door (ADR-0010)
+is not done yet — `runTurn` still parses every message through it.
 
 ### M5-spike — Prove Handover quality (cheapest risky thing) — ⚠️ gate before M4
 Wire a **second** Agent and, by hand, hand a half-finished job from Agent A to Agent B mid-walk:

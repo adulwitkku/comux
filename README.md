@@ -69,7 +69,10 @@ ctrl+c to exit. Coding requests are dispatched to an Agent in a new pane and git
 ## Status
 
 **M1–M3 are implemented and validated**: interactive TUI → local routing → visible Agent run
-→ git checkpoint. Scheduler/fallback across multiple Agents (M4) is next. See
+→ git checkpoint. **M3.5** (autonomous, check-verified PLAN-walk with a single Agent: plan →
+approve once → walk, gating each step on a frozen acceptance check) is implemented — its
+deterministic core is covered by `smoke:m3`; the live walk still needs an end-to-end run.
+Proving Handover quality with a second Agent, then the Scheduler (M4), comes next. See
 [`ROADMAP.md`](./ROADMAP.md).
 
 ## Docs
@@ -86,6 +89,7 @@ ctrl+c to exit. Coding requests are dispatched to an Agent in a new pane and git
 bun run typecheck     # tsc --noEmit (strict)
 bun run smoke:m1      # visible agent run + exit code + watchdog + checkpoint
 bun run smoke:m2      # Orchestrator routing (chat -> reply, build -> task)
+bun run smoke:m3      # PLAN.md parse/tick + acceptance-check runner (offline)
 bun run compare:pi    # local Orchestrator vs pi (cloud) as routers
 bun run try "msg"     # throw one message at the Orchestrator (add --pi to compare)
 ```

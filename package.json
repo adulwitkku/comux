@@ -36,6 +36,7 @@
     "build": "bun build scripts/harness.ts --compile --outfile dist/comux",
     "smoke:m1": "bun run scripts/smoke-m1.ts",
     "smoke:m2": "bun run scripts/smoke-m2.ts",
+    "smoke:m3": "bun run scripts/smoke-m3.ts",
     "compare:pi": "bun run scripts/compare-pi.ts",
     "try": "bun run scripts/try.ts",
     "typecheck": "tsc --noEmit"

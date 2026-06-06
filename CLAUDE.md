@@ -25,6 +25,7 @@ bun run build         # compile a standalone binary to dist/comux
 
 bun run smoke:m1      # M1 end-to-end: visible agent run + exit code + watchdog + checkpoint
 bun run smoke:m2      # M2: Orchestrator routing (chat -> reply, build -> task)
+bun run smoke:m3      # M3.5: PLAN.md parse/tick + acceptance-check runner (offline)
 bun run compare:pi    # local Orchestrator vs pi (cloud) as routers over 3 cases
 bun run try "msg"     # throw one message at the Orchestrator (add --pi to compare)
 ```
@@ -42,7 +43,11 @@ comux orchestrates other tools and shells out to them at runtime: Bun ≥ 1.3, a
 ## Architecture
 
 The flow per turn (`src/harness.ts:runTurn`): read PLAN.md + recent git log → `parseIntent`
-→ either show a REPLY or, after a human confirm, `runAgentStep` in a new cmux pane → `checkpoint`.
+→ either show a REPLY, or run an autonomous **PLAN-walk** for a coding task: a **plan dispatch**
+asks an Agent to author PLAN.md (Steps, each with a frozen Acceptance check) → the human
+approves the plan **once** → `walkPlan` dispatches each Step in a visible cmux pane, runs its
+Acceptance check, and `checkpoint`s only when the check passes (ADR-0009). A Step whose check
+keeps failing stops the walk (handover is M5).
 
 - **`src/orchestrator.ts` + `src/llm.ts`** — the Orchestrator. `parseIntent` builds a
   stateless system prompt (role + current PLAN.md + recent git log) and the new user
@@ -63,6 +68,10 @@ The flow per turn (`src/harness.ts:runTurn`): read PLAN.md + recent git log → 
   a shell launch command, wrapped by `confine` so the Agent can only **write** inside its
   workspace (ADR-0005; enforced via `sandbox-exec` on macOS only, opt out with
   `COMUX_NO_SANDBOX`). `selectAgent()` is a placeholder (always `pi`) until M4's Scheduler.
+- **`src/plan.ts` + `src/check.ts`** — PLAN.md is the job: an ordered list of Steps, each a
+  checklist item paired with a frozen Acceptance check (ADR-0009). `plan.ts` owns the on-disk
+  format (parse / tick) and the plan/step prompts; `check.ts` runs a Step's check (confined)
+  and a Step is "done" only when it exits 0 — not on exit-0 of the Agent or its self-report.
 - **`src/git.ts` + `src/workspace.ts`** — git is the source of truth for handover (ADR-0002).
   Agents are confined to their own workspace repo (`./workspace`), approved once then
   autonomous within that repo (ADR-0005).

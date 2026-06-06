@@ -82,7 +82,8 @@ function statusBar(): string {
 
 const tui = new Tui({ commands, status: statusBar, listFiles: () => listFiles(workspace) });
 const say = (m: string) => tui.print(m);
-const confirm = async (_task: string) => (autoYes ? true : tui.confirm("รันงานนี้เลยไหม?"));
+const confirm = async (_summary: string) =>
+  autoYes ? true : tui.confirm("อนุมัติแผนนี้แล้วรันทั้งหมดเลยไหม?");
 
 tui.printHeader();
 say(c.gray("  workspace: ") + c.blue(tilde(workspace)));
