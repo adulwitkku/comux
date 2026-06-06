@@ -48,10 +48,16 @@ Built on cmux CLI primitives, not node-pty (ADR-0007): `src/cmux.ts` (cmux wrapp
 end-to-end against the real cmux with `bun run smoke:m1` — completion + exit code capture,
 git checkpoint, and stuck-detection all pass.
 
-### M2 — Thin Orchestrator
-Connect to local Ollama (`gemma4:12b`). Turn natural-language input into a validated task
-spec `{thought, target_agent, command_string}`. Stateless per turn: each turn is
-`system prompt (role + current PLAN.md + recent git log) + new user message`.
+### M2 — Thin Orchestrator — ✅ implemented & validated
+Connect to local Ollama (`gemma4:12b-mlx`). Turn natural-language input into a validated
+minimal task spec `{reply, task}` (ADR-0006). Stateless per turn: each turn is
+`system prompt (role + current PLAN.md + recent git log) + new user message` — no chat
+history (ADR-0003).
+
+`src/llm.ts` (Ollama client + defensive JSON extraction), `src/orchestrator.ts`
+(`parseIntent` + normalisation). Proven with `bun run smoke:m2`: chat → reply, build → task,
+and the chat answer is grounded in PLAN.md. The MLX runtime does not enforce `format`
+strictly, so parsing is defensive (ADR-0008).
 
 ### M3 — PLAN.md loop + git checkpoints
 Approve PLAN.md once up front, then walk it step by step: dispatch Agent → verify →
@@ -80,11 +86,12 @@ configurable, not hardcoded.
 - **Watchdog timeout** — a silence timer: it resets on every new line of Agent output and
   fires only after N seconds of *no* output (≠ a total job timeout).
 
-## Open sub-questions (deferred to implementation)
+## Open sub-questions
 
-- How to force `gemma4:12b` to always emit valid JSON (structured output / grammar-
-  constrained decoding).
-- The watchdog's `N` (silence threshold) and how to distinguish "thinking" from "stuck".
+- ~~How to force the model to emit valid JSON.~~ Resolved: the MLX runtime ignores `format`,
+  so we parse defensively + normalise rather than trusting structured output (ADR-0008).
+- The watchdog's `N` (silence threshold) and how to distinguish "thinking" from "stuck"
+  (deferred; `read-screen` diffing is also sensitive to animated prompts — see ADR-0007).
 
 ## Stack
 
