@@ -124,7 +124,19 @@ Scheduler (M4) is worth building. Claude Code is now a real Agent in the registr
 confined like `pi` (its `~/.claude` store added to the sandbox). Not yet exercised: same-Step
 handover after a genuine mid-Step failure (the spike hands over at a Step boundary).
 
-### M4 — Scheduler + cooldown (greenlit — the M5-spike passed) — ⬜ next
+### M4 — Scheduler + cooldown — 🔨 partially implemented (chains + fallback done; cooldown open)
+
+**Done.** Per-capability Agent chains (ADR-0011): the Orchestrator classifies a message into a
+Capability (`web_search` / `image` / `coding`); `~/.config/comux/config.json` maps each to an
+ordered chain; the Scheduler (`src/scheduler.ts`, `runWithChain`) runs the most-preferred Agent
+and falls to the next when one crashes or goes silent. Six Agents are wired (`pi`, `claude`, `agy`,
+`codex`, `cursor`, `opencode`); `/setup` detects which CLIs are installed and writes the defaults
+(`smoke:setup` gates the config/registry offline). Coding jobs run the PLAN-walk with the
+`planning` chain for the plan dispatch and the `coding` chain per Step.
+
+**Still open** (the original M4 core): a **timed Cooldown** with bounce-back, and **quota-vs-error
+detection** so a rate-limit cools the Agent down (and returns when it resets) while an ordinary
+failure does not. Until then "down" is a per-job skip with no reset — see the design fork below.
 
 Support 2+ Agents. On quota/rate-limit: switch immediately and mark the Agent cooling
 down. On error/stuck: retry the same Agent once, then switch. Bounce back to a stronger

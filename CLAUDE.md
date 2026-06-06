@@ -26,6 +26,7 @@ bun run build         # compile a standalone binary to dist/comux
 bun run smoke:m1      # M1 end-to-end: visible agent run + exit code + watchdog + checkpoint
 bun run smoke:m2      # M2: Orchestrator routing (chat -> reply, build -> task)
 bun run smoke:m3      # M3.5: PLAN.md parse/tick + acceptance-check runner (offline)
+bun run smoke:setup   # M4: per-capability chains + registry + /setup detection (offline)
 bun run compare:pi    # local Orchestrator vs pi (cloud) as routers over 3 cases
 bun run try "msg"     # throw one message at the Orchestrator (add --pi to compare)
 ```
@@ -36,18 +37,22 @@ smoke scripts, which require a running cmux + Ollama + the `pi` CLI on PATH.
 ### Runtime requirements
 
 comux orchestrates other tools and shells out to them at runtime: Bun ≥ 1.3, a running
-**cmux** (it calls the `cmux` CLI — ADR-0007), **Ollama** serving `gemma4:12b-mlx`, and an
-**Agent CLI** (`pi`) on PATH. Env: `COMUX_WORKSPACE`, `COMUX_MODEL`, `OLLAMA_HOST`,
+**cmux** (it calls the `cmux` CLI — ADR-0007), **Ollama** serving `gemma4:12b-mlx`, and one or
+more **Agent CLIs** on PATH (`pi`, `claude`, `agy`, `codex`, `cursor-agent`, `opencode`) — run
+`/setup` to detect them and write the default per-capability chains to `~/.config/comux/config.json`.
+Env: `COMUX_WORKSPACE`, `COMUX_MODEL`, `OLLAMA_HOST`, `XDG_CONFIG_HOME` (config location),
 `COMUX_YES` (auto-approve), `COMUX_NO_SANDBOX` (disable macOS write-confinement).
 
 ## Architecture
 
 The flow per turn (`src/harness.ts:runTurn`): read PLAN.md + recent git log → `parseIntent`
-→ either show a REPLY, or run an autonomous **PLAN-walk** for a coding task: a **plan dispatch**
-asks an Agent to author PLAN.md (Steps, each with a frozen Acceptance check) → the human
-approves the plan **once** → `walkPlan` dispatches each Step in a visible cmux pane, runs its
-Acceptance check, and `checkpoint`s only when the check passes (ADR-0009). A Step whose check
-keeps failing stops the walk (handover is M5).
+→ either show a REPLY, or dispatch by **Capability** (ADR-0011). `web_search` / `image` are a
+single dispatch down that Capability's chain; `coding` runs the autonomous **PLAN-walk**: a
+**plan dispatch** (planning chain) asks an Agent to author PLAN.md (Steps, each with a frozen
+Acceptance check) → the human approves the plan **once** → `walkPlan` runs each Step down the
+coding chain in a visible cmux pane, runs its Acceptance check, and `checkpoint`s only when the
+check passes (ADR-0009). Every dispatch goes through the Scheduler (`runWithChain`): the most-
+preferred installed Agent runs and the next in the chain takes over when one falls over.
 
 - **`src/orchestrator.ts` + `src/llm.ts`** — the Orchestrator. `parseIntent` builds a
   stateless system prompt (role + current PLAN.md + recent git log) and the new user
@@ -64,10 +69,15 @@ keeps failing stops the walk (handover is M5).
 - **`src/cmux.ts`** — thin wrapper over the `cmux` CLI (split panes, send lines, read
   screen, set status). Every call shape was validated against the real CLI. This is the
   ONLY way agents are driven — no node-pty / keystroke injection (ADR-0007).
-- **`src/agents.ts` + `src/sandbox.ts`** — the Agent registry. Each Agent turns a task into
-  a shell launch command, wrapped by `confine` so the Agent can only **write** inside its
-  workspace (ADR-0005; enforced via `sandbox-exec` on macOS only, opt out with
-  `COMUX_NO_SANDBOX`). `selectAgent()` is a placeholder (always `pi`) until M4's Scheduler.
+- **`src/agents.ts` + `src/sandbox.ts`** — the Agent registry (`pi`, `claude`, `agy`, `codex`,
+  `cursor`, `opencode`), keyed by the name chains reference. Each Agent turns a task into a shell
+  launch command, wrapped by `confine` so the Agent can only **write** inside its workspace
+  (ADR-0005; enforced via `sandbox-exec` on macOS only, opt out with `COMUX_NO_SANDBOX`). Agents
+  with their own permission prompt are told to skip it — the sandbox is the real boundary.
+- **`src/config.ts` + `src/setup.ts` + `src/scheduler.ts`** — per-Capability Agent chains
+  (ADR-0011). `config.ts` owns the chains and `~/.config/comux/config.json`; `/setup` (`setup.ts`)
+  detects installed CLIs and writes the defaults; `scheduler.ts` (`runWithChain`) walks a chain,
+  marking an Agent down and moving to the next on crash/silence. Timed Cooldown is still M4.
 - **`src/plan.ts` + `src/check.ts`** — PLAN.md is the job: an ordered list of Steps, each a
   checklist item paired with a frozen Acceptance check (ADR-0009). `plan.ts` owns the on-disk
   format (parse / tick) and the plan/step prompts; `check.ts` runs a Step's check (confined)

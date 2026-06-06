@@ -1,38 +1,37 @@
-// One turn of the harness (M3.5): parse the user's message, then either reply or run an
-// autonomous, check-verified PLAN-walk with a single Agent.
+// One turn of the harness: parse the user's message into a Capability, then route it.
 //
-// Flow for a coding request (ADR-0009 / ADR-0005):
-//   1. Plan dispatch  — an Agent authors PLAN.md: Steps, each with a frozen Acceptance check.
-//   2. Approve once   — the human approves the whole plan up front (not per step).
-//   3. Walk           — for each unchecked Step: dispatch the work, run its Acceptance check,
-//                       and only on a passing check tick the box + git-checkpoint.
+//   chat        → show a REPLY (the Orchestrator answered it).
+//   web_search  → a single dispatch down the web_search chain.
+//   image       → a single dispatch down the image chain.
+//   coding      → the autonomous PLAN-walk: a plan dispatch (planning chain) authors PLAN.md,
+//                 the human approves it once (ADR-0005), then each Step is implemented down the
+//                 coding chain and gated on its frozen Acceptance check (ADR-0009).
 //
-// Multi-Agent handover/scheduling (M4/M5) is not here: a Step whose check keeps failing stops
-// the walk rather than switching Agents. A failing Step is left at the last good checkpoint so
-// a future Handover can resume it.
+// Every dispatch runs through the Scheduler (`runWithChain`): the most-preferred Agent that is
+// still available runs; if it crashes or goes silent it is marked down and the next Agent in the
+// chain takes over (ADR-0004). Timed Cooldown / quota-vs-error detection is the open M4 fork.
 
 import { parseIntent } from "./orchestrator.ts";
-import { runAgentStep, DEFAULT_WATCHDOG_MS } from "./agent-runner.ts";
-import { selectAgent, type Agent } from "./agents.ts";
-import { checkpoint } from "./git.ts";
+import { DEFAULT_WATCHDOG_MS } from "./agent-runner.ts";
+import { runWithChain } from "./scheduler.ts";
+import { checkpoint, hasChanges } from "./git.ts";
 import { readPlan, recentGitLog } from "./workspace.ts";
 import { readSteps, tickStep, planPrompt, stepPrompt, type Step } from "./plan.ts";
-import { runCheck } from "./check.ts";
 import { setStatus, log, type SurfaceRef } from "./cmux.ts";
 import { ui, c } from "./ui.ts";
+import type { Config, Capability } from "./config.ts";
 
 export interface TurnDeps {
   workspace: string;
   selfSurface: SurfaceRef;
-  /** Human gate: approve the whole plan once before the autonomous walk (ADR-0005). */
+  /** Per-capability Agent chains. */
+  config: Config;
+  /** Human gate: approve a coding plan, or a single-shot dispatch, before it runs (ADR-0005). */
   confirm: (summary: string) => Promise<boolean>;
   /** Emit a line to the user. */
   say: (msg: string) => void;
   watchdogMs?: number;
 }
-
-/** How many times a single Step is attempted before the walk stops (handover is M5). */
-const STEP_ATTEMPTS = 2;
 
 export async function runTurn(input: string, deps: TurnDeps): Promise<void> {
   const planMd = await readPlan(deps.workspace);
@@ -48,15 +47,83 @@ export async function runTurn(input: string, deps: TurnDeps): Promise<void> {
   }
 
   const goal = spec.task;
-  const agent = selectAgent();
+  const capability = spec.capability ?? "coding";
+  deps.say(ui.dispatch(`${c.gray(`[${capability}]`)} ${goal}`));
+
+  if (capability === "coding") {
+    await codingJob(goal, deps);
+  } else {
+    await singleDispatch(capability, goal, deps);
+  }
+}
+
+/** A one-shot capability (web_search / image): run the goal down that capability's chain. */
+async function singleDispatch(capability: Capability, goal: string, deps: TurnDeps): Promise<void> {
+  const chain = deps.config.chains[capability];
+  if (!(await deps.confirm(goal))) {
+    await setStatus("harness", "idle");
+    deps.say(ui.warn("cancelled."));
+    return;
+  }
+  await setStatus("harness", `running ${capability}`);
+  await log(`${capability}: ${goal}`);
+
+  const outcome = await runWithChain({
+    chain,
+    prompt: goal,
+    workspace: deps.workspace,
+    fromSurface: deps.selfSurface,
+    watchdogMs: deps.watchdogMs ?? DEFAULT_WATCHDOG_MS,
+    down: new Set(),
+    say: deps.say,
+    label: capability,
+  });
+
+  await setStatus("harness", "idle");
+  if (!outcome.ok) {
+    deps.say(ui.warn(`every agent in the ${capability} chain was exhausted.`));
+    return;
+  }
+  // web_search answers in the pane; image (and any file writes) get checkpointed.
+  const hash = (await hasChanges(deps.workspace))
+    ? await checkpoint(deps.workspace, `${outcome.agent} (${capability}): ${goal}`)
+    : null;
+  deps.say(ui.ok(`done via ${outcome.agent}${hash ? ` — checkpoint ${hash}` : ""}`));
+}
+
+/** A coding job: plan (planning chain) → approve once → walk Steps (coding chain). */
+async function codingJob(goal: string, deps: TurnDeps): Promise<void> {
   const watchdogMs = deps.watchdogMs ?? DEFAULT_WATCHDOG_MS;
-  deps.say(ui.dispatch(goal));
+  const down = new Set<string>(); // agents that fall over stay down for the rest of the job
 
-  // 1. Plan dispatch — the Agent authors PLAN.md (a confined write); nothing is built yet.
-  const steps = await planJob(goal, agent, deps, watchdogMs);
-  if (!steps) return;
+  // 1. Plan dispatch — author PLAN.md down the planning chain (a confined write; nothing built).
+  await setStatus("harness", "planning");
+  await log(`plan dispatch: ${goal}`);
+  const planned = await runWithChain({
+    chain: deps.config.chains.planning,
+    prompt: planPrompt(goal),
+    workspace: deps.workspace,
+    fromSurface: deps.selfSurface,
+    watchdogMs,
+    down,
+    say: deps.say,
+    label: "planning",
+  });
+  if (!planned.ok) {
+    await setStatus("harness", "idle");
+    deps.say(ui.warn("every agent in the planning chain was exhausted. aborting."));
+    return;
+  }
 
-  // 2. Approve once — show the plan, gate the whole autonomous walk on a single confirm.
+  const steps = await readSteps(deps.workspace);
+  if (steps.length === 0) {
+    await setStatus("harness", "idle");
+    deps.say(ui.warn("no verifiable steps in PLAN.md (each step needs a `check:`). aborting."));
+    return;
+  }
+  await checkpoint(deps.workspace, `plan: ${goal}`);
+
+  // 2. Approve once — gate the whole autonomous walk on a single confirm.
   deps.say(ui.banner("  PLAN"));
   steps.forEach((s, i) =>
     deps.say(`  ${c.bold(String(i + 1))}. ${s.description}  ${c.gray(`· check: ${s.check}`)}`),
@@ -67,54 +134,11 @@ export async function runTurn(input: string, deps: TurnDeps): Promise<void> {
     return;
   }
 
-  // 3. Walk — implement each Step, gate it on its Acceptance check, checkpoint on pass.
-  await walkPlan(steps, agent, deps, watchdogMs);
+  // 3. Walk — implement each Step down the coding chain, gated on its Acceptance check.
+  await walkPlan(steps, deps, down, watchdogMs);
 }
 
-/** Run the Plan dispatch and return the parsed Steps, or null if planning failed. */
-async function planJob(
-  goal: string,
-  agent: Agent,
-  deps: TurnDeps,
-  watchdogMs: number,
-): Promise<Step[] | null> {
-  await setStatus("harness", `planning with ${agent.name}`);
-  await log(`plan dispatch to ${agent.name}: ${goal}`);
-  deps.say(ui.running(`planning with ${agent.name} in a new pane…`));
-
-  const result = await runAgentStep({
-    fromSurface: deps.selfSurface,
-    launchCommand: agent.buildCommand(planPrompt(goal), deps.workspace),
-    watchdogMs,
-    closeOnEnd: false,
-  });
-
-  if (result.outcome !== "completed" || result.exitCode !== 0) {
-    await setStatus("harness", "idle");
-    const why = result.outcome === "stuck" ? "went silent (watchdog)" : `exited ${result.exitCode}`;
-    deps.say(ui.warn(`planning failed — ${agent.name} ${why}.`));
-    return null;
-  }
-
-  const steps = await readSteps(deps.workspace);
-  if (steps.length === 0) {
-    await setStatus("harness", "idle");
-    deps.say(ui.warn("no verifiable steps found in PLAN.md (each step needs a `check:`). aborting."));
-    return null;
-  }
-
-  // Checkpoint the plan itself so the walk resumes from a known-good PLAN.md.
-  await checkpoint(deps.workspace, `plan: ${goal}`);
-  return steps;
-}
-
-/** Implement each unchecked Step, gating completion on its Acceptance check. */
-async function walkPlan(
-  steps: Step[],
-  agent: Agent,
-  deps: TurnDeps,
-  watchdogMs: number,
-): Promise<void> {
+async function walkPlan(steps: Step[], deps: TurnDeps, down: Set<string>, watchdogMs: number): Promise<void> {
   const total = steps.length;
 
   for (const [idx, step] of steps.entries()) {
@@ -124,43 +148,29 @@ async function walkPlan(
       continue;
     }
 
-    let passed = false;
-    for (let attempt = 1; attempt <= STEP_ATTEMPTS && !passed; attempt++) {
-      await setStatus("harness", `step ${n}/${total} (${agent.name}, try ${attempt})`);
-      await log(`step ${n}/${total} to ${agent.name}: ${step.description}`);
-      deps.say(ui.running(`step ${n}/${total}: ${step.description}${attempt > 1 ? ` (retry ${attempt})` : ""}`));
+    await setStatus("harness", `step ${n}/${total}`);
+    await log(`step ${n}/${total}: ${step.description}`);
+    const outcome = await runWithChain({
+      chain: deps.config.chains.coding,
+      prompt: stepPrompt(step),
+      workspace: deps.workspace,
+      fromSurface: deps.selfSurface,
+      watchdogMs,
+      down,
+      check: step.check,
+      say: deps.say,
+      label: `step ${n}/${total}`,
+    });
 
-      const result = await runAgentStep({
-        fromSurface: deps.selfSurface,
-        launchCommand: agent.buildCommand(stepPrompt(step), deps.workspace),
-        watchdogMs,
-        closeOnEnd: false,
-      });
-      if (result.outcome !== "completed") {
-        deps.say(ui.warn(`${agent.name} went silent on step ${n} (watchdog).`));
-        break; // a stuck Agent will not pass on retry; stop here.
-      }
-
-      const check = await runCheck(step.check, deps.workspace);
-      if (check.ok) {
-        passed = true;
-      } else {
-        const tail = check.output.split("\n").slice(-1)[0] ?? "";
-        deps.say(
-          ui.warn(`check failed (exit ${check.exitCode}): ${step.check}${tail ? ` — ${c.gray(tail)}` : ""}`),
-        );
-      }
-    }
-
-    if (!passed) {
+    if (!outcome.ok) {
       await setStatus("harness", "idle");
-      deps.say(ui.warn(`stopped at step ${n}/${total}. left at last checkpoint. [handover comes in M5]`));
+      deps.say(ui.warn(`stopped at step ${n}/${total}: coding chain exhausted. left at last checkpoint. [resume via M5 handover]`));
       return;
     }
 
     await tickStep(deps.workspace, step);
-    const hash = await checkpoint(deps.workspace, `${agent.name}: ${step.description}`);
-    deps.say(ui.ok(`step ${n}/${total} done${hash ? ` — checkpoint ${hash}` : ""}`));
+    const hash = await checkpoint(deps.workspace, `${outcome.agent}: ${step.description}`);
+    deps.say(ui.ok(`step ${n}/${total} done via ${outcome.agent}${hash ? ` — checkpoint ${hash}` : ""}`));
   }
 
   await setStatus("harness", "idle");

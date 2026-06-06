@@ -57,6 +57,11 @@ export function confine(launch: string, workspace: string): string {
     join(home, ".claude"),
     join(home, ".claude.json"),
     join(home, ".codex"),
+    join(home, ".cursor"),
+    join(home, ".cursor-agent"),
+    join(home, ".agy"),
+    join(home, ".opencode"),
+    join(home, ".local", "share"),
   ];
 
   // Last-match-wins: allow everything, drop all writes, then re-allow the writable subpaths.

@@ -20,6 +20,8 @@ import { Tui, type Item } from "../src/tui.ts";
 import { lastStats } from "../src/llm.ts";
 import { VERSION } from "../src/version.ts";
 import { c } from "../src/ui.ts";
+import { loadConfig, configExists, configPath, type Config, type ChainKey } from "../src/config.ts";
+import { runSetup, detectAgents, type SetupResult } from "../src/setup.ts";
 
 const args = process.argv.slice(2);
 
@@ -58,7 +60,30 @@ const selfSurface = await identifySelf();
 const model = process.env.COMUX_MODEL ?? "gemma4:12b-mlx";
 const autoYes = !!process.env.COMUX_YES;
 
+// First run writes the default per-capability chains; thereafter load what the user has (and may
+// have edited). `firstRun` is reported once the header is up.
+const firstRun = !configExists();
+const firstSetup: SetupResult | null = firstRun ? await runSetup() : null;
+let config: Config = firstSetup?.config ?? (await loadConfig());
+
+/** Pretty-print the chains and which Agent CLIs are present. */
+function showAgents(): void {
+  const installed = new Map(detectAgents().map((a) => [a.name, a.installed]));
+  const mark = (n: string) => (installed.get(n) ? c.green(n) : c.red(`${n}✗`));
+  let anyMissing = false;
+  say(c.gray(`  config: ${configPath()}`));
+  for (const [cap, names] of Object.entries(config.chains) as [ChainKey, string[]][]) {
+    if (names.some((n) => !installed.get(n))) anyMissing = true;
+    say(`  ${c.cyan(cap.padEnd(11))} ${names.map(mark).join(c.gray(" → "))}`);
+  }
+  if (anyMissing) {
+    say(c.gray(`  (${c.red("✗")} = CLI not on PATH; install it or remove it from the chain)`));
+  }
+}
+
 const commands: Item[] = [
+  { name: "/setup", desc: "detect agents & write default chains" },
+  { name: "/agents", desc: "show capability chains" },
   { name: "/plan", desc: "show PLAN.md" },
   { name: "/ws", desc: "show workspace path" },
   { name: "/help", desc: "keybindings & commands" },
@@ -89,6 +114,13 @@ tui.printHeader();
 say(c.gray("  workspace: ") + c.blue(tilde(workspace)));
 say("");
 
+if (firstSetup) {
+  say(c.green("  ✓ first run — wrote default agent chains:"));
+  showAgents();
+  say(c.gray("  edit that file to customise the order, or /setup to reset · /agents to view."));
+  say("");
+}
+
 if (!process.stdin.isTTY) {
   say(c.red("  this TUI needs an interactive terminal (run it directly, not piped)."));
   process.exit(0);
@@ -104,8 +136,18 @@ loop: for (;;) {
     case "/quit":
       break loop;
     case "/help":
-      say(c.gray("  /plan  show PLAN.md   ·   /ws  show workspace   ·   /exit"));
+      say(c.gray("  /setup  reset chains  ·  /agents  view chains  ·  /plan  PLAN.md  ·  /ws  ·  /exit"));
       say(c.gray("  keys: ↑↓ choose command · ⏎ run · ⇥ complete · esc clear · ctrl+c exit"));
+      continue;
+    case "/setup": {
+      const r = await runSetup();
+      config = r.config;
+      say(c.green("  ✓ wrote default agent chains:"));
+      showAgents();
+      continue;
+    }
+    case "/agents":
+      showAgents();
       continue;
     case "/ws":
       say(c.blue(`  ${workspace}`));
@@ -116,7 +158,7 @@ loop: for (;;) {
   }
 
   try {
-    await runTurn(line, { workspace, selfSurface, confirm, say });
+    await runTurn(line, { workspace, selfSurface, config, confirm, say });
   } catch (e) {
     say(c.red(`  ⚠ error: ${(e as Error).message}`));
   }

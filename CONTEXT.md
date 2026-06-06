@@ -28,10 +28,17 @@ between them per Step is still M4.
 _Avoid_: Worker, CLI
 
 **Task spec**:
-The minimal structured output of the Orchestrator: one JSON object `{reply, task}` with
-exactly one field set — `reply` (the Orchestrator answers the user directly) or `task` (a
-natural-language instruction to dispatch). It names WHAT to do, never WHO does it — the
-Scheduler picks the Agent. The only artifact the Orchestrator is responsible for producing.
+The minimal structured output of the Orchestrator: one JSON object `{reply, task, capability}`
+where `reply` and `task` are mutually exclusive — `reply` (the Orchestrator answers the user
+directly) or `task` (a natural-language instruction to dispatch, tagged with a Capability). It
+names WHAT to do, never WHO does it — config + the Scheduler pick the Agent. The only artifact
+the Orchestrator is responsible for producing.
+
+**Capability**:
+The kind of work a dispatched task is — `web_search`, `image`, or `coding` (a chat reply has
+none). The Orchestrator classifies the message into a Capability; deterministic config maps each
+Capability to its own Agent chain. It is a classification of the work, never an Agent name
+(ADR-0011).
 
 **Handover**:
 The transfer of an in-progress job from a failed/exhausted Agent to the next Agent in
@@ -67,13 +74,16 @@ dispatches that follow. Authoring the plan is the Agent's job, never the Orchest
 (it names work, not plans — see Task spec).
 
 **Agent chain**:
-The intended preference order of Agents (Claude Code → Codex → Antigravity → Cursor,
-best-preferred first). It is a preference ranking for the Scheduler, NOT a one-way descent.
-This is the M4 design target; today the registry holds a single Agent (`pi`).
+The ordered preference of Agents for one Capability (best-preferred first), e.g. coding is
+`cursor → codex → claude → agy → opencode → pi`. There is one chain **per Capability**, kept in
+the user's config and editable by hand. It is a preference ranking for the Scheduler, NOT a
+one-way descent (ADR-0011).
 
 **Scheduler**:
-The deterministic logic that picks, at each step, the most-preferred Agent not currently in
-Cooldown. Bounces back up to a stronger Agent when it recovers.
+The deterministic logic that, for a given Capability's chain, runs the most-preferred Agent that
+is still available and falls to the next when one is unavailable. The intended end state bounces
+back up to a stronger Agent when its Cooldown resets; today a fallen-over Agent is skipped for the
+rest of the job (timed Cooldown is the open M4 work).
 
 **Cooldown**:
 A temporary "unavailable" mark on an Agent that hit a quota/rate-limit, with a reset window

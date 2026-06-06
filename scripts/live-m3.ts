@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { identifySelf } from "../src/cmux.ts";
 import { ensureWorkspace } from "../src/workspace.ts";
 import { runTurn } from "../src/harness.ts";
+import { loadConfig } from "../src/config.ts";
 
 const goal =
   process.argv[2] ??
@@ -23,6 +24,7 @@ console.log(`goal: ${goal}\n`);
 await runTurn(goal, {
   workspace,
   selfSurface,
+  config: await loadConfig(),
   confirm: async () => {
     console.log("[auto-approve plan]");
     return true;

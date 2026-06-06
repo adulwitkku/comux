@@ -45,7 +45,9 @@ comux orchestrates other tools; it needs them present at runtime:
 - a running [cmux](https://cmux.com) (comux shells out to the `cmux` CLI — see ADR-0007)
 - [Ollama](https://ollama.com) serving the Orchestrator model:
   `ollama pull gemma4:12b-mlx`
-- an Agent CLI on `PATH` — currently [`pi`](https://pi.dev)
+- one or more Agent CLIs on `PATH` — any of `pi`, `claude`, `agy`, `codex`, `cursor-agent`,
+  `opencode`. On first launch comux runs `/setup`: it detects which are installed and writes the
+  default per-capability chains to `~/.config/comux/config.json` (edit it to reorder; `/agents` to view).
 
 ## Usage
 
