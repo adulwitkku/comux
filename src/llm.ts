@@ -51,12 +51,33 @@ export async function chat(messages: ChatMessage[], opts: ChatOptions = {}): Pro
     if (!res.ok) {
       throw new Error(`Ollama ${res.status}: ${(await res.text()).slice(0, 300)}`);
     }
-    const data = (await res.json()) as { message?: { content?: string } };
+    const data = (await res.json()) as {
+      message?: { content?: string };
+      eval_count?: number;
+      eval_duration?: number;
+      prompt_eval_count?: number;
+    };
+    if (data.eval_count && data.eval_duration) {
+      lastStats = {
+        tokensPerSec: data.eval_count / (data.eval_duration / 1e9),
+        evalTokens: data.eval_count,
+        promptTokens: data.prompt_eval_count ?? null,
+      };
+    }
     return data.message?.content ?? "";
   } finally {
     clearTimeout(timer);
   }
 }
+
+export interface GenStats {
+  tokensPerSec: number | null;
+  evalTokens: number | null;
+  promptTokens: number | null;
+}
+
+/** Stats from the most recent `chat` call, for the TUI status bar. */
+export let lastStats: GenStats = { tokensPerSec: null, evalTokens: null, promptTokens: null };
 
 /**
  * Pull a single JSON object out of a model response, tolerant of ```json fences and

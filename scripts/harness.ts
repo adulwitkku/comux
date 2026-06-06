@@ -7,52 +7,61 @@
 //
 // Commands:  /plan  show PLAN.md   ·   /ws  show workspace   ·   /help   ·   /exit
 
-import * as readline from "node:readline/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { identifySelf } from "../src/cmux.ts";
-import { ensureWorkspace, readPlan } from "../src/workspace.ts";
+import { ensureWorkspace, readPlan, currentBranch } from "../src/workspace.ts";
 import { runTurn } from "../src/harness.ts";
-import { ui, c } from "../src/ui.ts";
-
-const COMMANDS = ["/plan", "/ws", "/help", "/exit"] as const;
-
-function completer(line: string): [string[], string] {
-  if (!line.startsWith("/")) return [[], line];
-  const hits = COMMANDS.filter((cmd) => cmd.startsWith(line));
-  return [hits.length ? hits : [...COMMANDS], line];
-}
+import { Tui, type Command } from "../src/tui.ts";
+import { lastStats } from "../src/llm.ts";
+import { c } from "../src/ui.ts";
 
 const wsArg = process.argv[2];
 const workspace = await ensureWorkspace(
   wsArg ?? process.env.HARNESS_WORKSPACE ?? join(import.meta.dir, "..", "workspace"),
 );
 const selfSurface = await identifySelf();
-
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-  completer,
-});
-const say = (m: string) => console.log(m);
-
-console.log(ui.banner("◆ cmux harness") + c.gray("  — M3"));
-console.log(c.gray("  workspace: ") + c.blue(workspace));
-console.log(ui.hint("  type a message, /help for commands (Tab completes /). first model call loads gemma (~10-30s).") + "\n");
-
+const model = process.env.HARNESS_MODEL ?? "gemma4:12b-mlx";
 const autoYes = !!process.env.HARNESS_YES;
-const confirm = async (_task: string): Promise<boolean> => {
-  if (autoYes) return true; // non-interactive / autonomous mode
-  const a = (await rl.question(c.yellow("  รันงานนี้เลยไหม? ") + c.gray("[Y/n] "))).trim().toLowerCase();
-  return a === "" || a === "y" || a === "yes";
-};
+
+const commands: Command[] = [
+  { name: "/plan", desc: "show PLAN.md" },
+  { name: "/ws", desc: "show workspace path" },
+  { name: "/help", desc: "keybindings & commands" },
+  { name: "/exit", desc: "quit" },
+];
+
+const tilde = (p: string) => (p.startsWith(homedir()) ? "~" + p.slice(homedir().length) : p);
+
+function statusBar(): string {
+  const loc = `${c.blue(tilde(workspace))} ${c.gray(`(${currentBranch(workspace)})`)}`;
+  const ctx = c.gray(
+    lastStats.promptTokens != null ? `${lastStats.promptTokens}/256k` : "0/256k",
+  );
+  const m = c.gray(`(ollama) `) + c.magenta(model);
+  const tps =
+    lastStats.tokensPerSec != null
+      ? c.yellow("⚡ ") + c.gray(`${lastStats.tokensPerSec.toFixed(1)} tok/s`)
+      : c.yellow("⚡ ") + c.gray("TPS: --");
+  return `${loc}  ${c.gray("·")}  ${ctx}  ${c.gray("·")}  ${m}  ${c.gray("·")}  ${tps}`;
+}
+
+const tui = new Tui({ commands, status: statusBar });
+const say = (m: string) => tui.print(m);
+const confirm = async (_task: string) => (autoYes ? true : tui.confirm("รันงานนี้เลยไหม?"));
+
+tui.printHeader();
+say(c.gray("  workspace: ") + c.blue(tilde(workspace)));
+say("");
+
+if (!process.stdin.isTTY) {
+  say(c.red("  this TUI needs an interactive terminal (run it directly, not piped)."));
+  process.exit(0);
+}
 
 loop: for (;;) {
-  let line: string;
-  try {
-    line = (await rl.question(ui.prompt())).trim();
-  } catch {
-    break; // stdin closed (Ctrl-D / EOF)
-  }
+  const line = (await tui.readLine())?.trim();
+  if (line == null) break; // ctrl+c / ctrl+d
   if (!line) continue;
 
   switch (line) {
@@ -60,8 +69,8 @@ loop: for (;;) {
     case "/quit":
       break loop;
     case "/help":
-      say(ui.hint("  /plan") + c.gray("  show PLAN.md") + ui.hint("   ·   /ws") +
-        c.gray("  show workspace") + ui.hint("   ·   /exit"));
+      say(c.gray("  /plan  show PLAN.md   ·   /ws  show workspace   ·   /exit"));
+      say(c.gray("  keys: ↑↓ choose command · ⏎ run · ⇥ complete · esc clear · ctrl+c exit"));
       continue;
     case "/ws":
       say(c.blue(`  ${workspace}`));
@@ -74,9 +83,8 @@ loop: for (;;) {
   try {
     await runTurn(line, { workspace, selfSurface, confirm, say });
   } catch (e) {
-    say(ui.warn(`error: ${(e as Error).message}`));
+    say(c.red(`  ⚠ error: ${(e as Error).message}`));
   }
 }
 
-rl.close();
 console.log(c.gray("bye."));

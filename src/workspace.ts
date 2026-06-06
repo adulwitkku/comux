@@ -33,3 +33,9 @@ export async function readPlan(dir: string): Promise<string> {
 export async function recentGitLog(dir: string, n = 5): Promise<string> {
   return (await git(["log", "--oneline", `-${n}`], dir)).trim();
 }
+
+/** Current git branch name (synchronous; cheap enough to call once per prompt). */
+export function currentBranch(dir: string): string {
+  const r = Bun.spawnSync(["git", "branch", "--show-current"], { cwd: dir });
+  return r.stdout.toString().trim() || "—";
+}
