@@ -22,8 +22,9 @@ deterministic Harness loop is the conductor, not the model)
 
 **Agent**:
 An external, more-capable coding CLI that does the actual work. The "hands" of the system.
-Currently the only implemented Agent is `pi`; Claude Code, Codex, Cursor, and Antigravity
-are roadmap targets for the multi-Agent Scheduler (M4), not yet wired in.
+Two Agents are wired in — `pi` and Claude Code (`claude`) — and were used together to validate
+Handover; Codex, Cursor, and Antigravity remain roadmap targets. The Scheduler that picks
+between them per Step is still M4.
 _Avoid_: Worker, CLI
 
 **Task spec**:

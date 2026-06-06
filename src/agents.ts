@@ -1,6 +1,7 @@
 // Agent registry. Each Agent knows how to turn a task instruction into a shell command
 // that runs it non-interactively in its working directory. Picking WHICH agent runs is the
-// Scheduler's job (ADR-0004); for M3 there is a single agent and a placeholder selector.
+// Scheduler's job (ADR-0004), still a placeholder until M4; the registry holds the Agents the
+// Scheduler will choose between (today: pi and Claude Code, used together by the M5 handover).
 //
 // Every built command is run through `confine` so the Agent can only write inside its
 // workspace repo (ADR-0005).
@@ -26,7 +27,16 @@ export const pi: Agent = {
     confine(`cd ${shq(cwd)} && pi -p --no-session ${shq(task)}`, cwd),
 };
 
-export const AGENTS: Agent[] = [pi];
+// Claude Code runs headless with -p. `--dangerously-skip-permissions` is acceptable here
+// because the real write boundary is the sandbox (ADR-0005), not Claude's own permission gate;
+// confined, it can still only write inside the workspace.
+export const claudeCode: Agent = {
+  name: "claude",
+  buildCommand: (task, cwd) =>
+    confine(`cd ${shq(cwd)} && claude -p ${shq(task)} --dangerously-skip-permissions`, cwd),
+};
+
+export const AGENTS: Agent[] = [pi, claudeCode];
 
 /** Placeholder until M4's availability scheduler exists: always the first agent. */
 export function selectAgent(): Agent {

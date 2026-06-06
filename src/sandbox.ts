@@ -53,6 +53,10 @@ export function confine(launch: string, workspace: string): string {
     join(home, ".config"),
     join(home, ".local"),
     join(home, ".pi"),
+    // Agent CLIs keep their session/config in the home dir; allow each Agent's own store.
+    join(home, ".claude"),
+    join(home, ".claude.json"),
+    join(home, ".codex"),
   ];
 
   // Last-match-wins: allow everything, drop all writes, then re-allow the writable subpaths.

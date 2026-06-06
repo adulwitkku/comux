@@ -37,6 +37,8 @@
     "smoke:m1": "bun run scripts/smoke-m1.ts",
     "smoke:m2": "bun run scripts/smoke-m2.ts",
     "smoke:m3": "bun run scripts/smoke-m3.ts",
+    "live:m3": "bun run scripts/live-m3.ts",
+    "spike:m5": "bun run scripts/spike-m5.ts",
     "compare:pi": "bun run scripts/compare-pi.ts",
     "try": "bun run scripts/try.ts",
     "typecheck": "tsc --noEmit"

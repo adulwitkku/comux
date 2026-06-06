@@ -110,14 +110,22 @@ only after its check passed (3 commits: plan + 2 steps). Not yet exercised live:
 paths. Still open: demoting the Orchestrator to an optional front-door (ADR-0010) — `runTurn`
 still parses every message through it.
 
-### M5-spike — Prove Handover quality (cheapest risky thing) — ⚠️ gate before M4
+### M5-spike — Prove Handover quality (cheapest risky thing) — ✅ validated; M4 greenlit
 Wire a **second** Agent and, by hand, hand a half-finished job from Agent A to Agent B mid-walk:
-B reads the repo + PLAN.md and must satisfy the failed Step's *frozen* Acceptance check. The
-make-or-break question is whether a heterogeneous Agent resumes cold-from-git work to an
-acceptable standard. If it does, build the Scheduler; if not, multi-Agent failover is worthless
-and we just saved building M4. (Proving "the riskiest thing first" — same principle as M1.)
+B reads the repo + PLAN.md and must satisfy a Step's *frozen* Acceptance check. The make-or-break
+question is whether a heterogeneous Agent resumes cold-from-git work to an acceptable standard.
 
-### M4 — Scheduler + cooldown (only if the M5-spike passes)
+**Result (passed).** `bun run spike:m5` runs a hand-authored 2-Step plan where Step 2 depends on
+Step 1's artifact: `pi` writes `greet.sh`; then **Claude Code**, a different process with no shared
+memory, resumes from git + PLAN.md and writes a `Makefile` whose `run` target invokes `sh greet.sh`
+— it read `pi`'s file and wired to it rather than re-implementing. Step 2's check passes *and* Step
+1's frozen check still passes afterwards (no clobber). Handover quality is acceptable, so the
+Scheduler (M4) is worth building. Claude Code is now a real Agent in the registry (`src/agents.ts`),
+confined like `pi` (its `~/.claude` store added to the sandbox). Not yet exercised: same-Step
+handover after a genuine mid-Step failure (the spike hands over at a Step boundary).
+
+### M4 — Scheduler + cooldown (greenlit — the M5-spike passed) — ⬜ next
+
 Support 2+ Agents. On quota/rate-limit: switch immediately and mark the Agent cooling
 down. On error/stuck: retry the same Agent once, then switch. Bounce back to a stronger
 Agent when its cooldown resets. When all are exhausted: wait and resume.
