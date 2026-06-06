@@ -12,6 +12,15 @@ import { join } from "node:path";
 import { identifySelf } from "../src/cmux.ts";
 import { ensureWorkspace, readPlan } from "../src/workspace.ts";
 import { runTurn } from "../src/harness.ts";
+import { ui, c } from "../src/ui.ts";
+
+const COMMANDS = ["/plan", "/ws", "/help", "/exit"] as const;
+
+function completer(line: string): [string[], string] {
+  if (!line.startsWith("/")) return [[], line];
+  const hits = COMMANDS.filter((cmd) => cmd.startsWith(line));
+  return [hits.length ? hits : [...COMMANDS], line];
+}
 
 const wsArg = process.argv[2];
 const workspace = await ensureWorkspace(
@@ -19,24 +28,28 @@ const workspace = await ensureWorkspace(
 );
 const selfSurface = await identifySelf();
 
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+  completer,
+});
 const say = (m: string) => console.log(m);
 
-console.log("cmux harness — M3");
-console.log(`workspace: ${workspace}`);
-console.log("type a message, or /help. first model call loads gemma (~10-30s).\n");
+console.log(ui.banner("◆ cmux harness") + c.gray("  — M3"));
+console.log(c.gray("  workspace: ") + c.blue(workspace));
+console.log(ui.hint("  type a message, /help for commands (Tab completes /). first model call loads gemma (~10-30s).") + "\n");
 
 const autoYes = !!process.env.HARNESS_YES;
 const confirm = async (_task: string): Promise<boolean> => {
   if (autoYes) return true; // non-interactive / autonomous mode
-  const a = (await rl.question(`  รันงานนี้เลยไหม? [Y/n] `)).trim().toLowerCase();
+  const a = (await rl.question(c.yellow("  รันงานนี้เลยไหม? ") + c.gray("[Y/n] "))).trim().toLowerCase();
   return a === "" || a === "y" || a === "yes";
 };
 
 loop: for (;;) {
   let line: string;
   try {
-    line = (await rl.question("› ")).trim();
+    line = (await rl.question(ui.prompt())).trim();
   } catch {
     break; // stdin closed (Ctrl-D / EOF)
   }
@@ -47,22 +60,23 @@ loop: for (;;) {
     case "/quit":
       break loop;
     case "/help":
-      say("  /plan  show PLAN.md   ·   /ws  show workspace   ·   /exit");
+      say(ui.hint("  /plan") + c.gray("  show PLAN.md") + ui.hint("   ·   /ws") +
+        c.gray("  show workspace") + ui.hint("   ·   /exit"));
       continue;
     case "/ws":
-      say(`  ${workspace}`);
+      say(c.blue(`  ${workspace}`));
       continue;
     case "/plan":
-      say(await readPlan(workspace));
+      say(c.gray(await readPlan(workspace)));
       continue;
   }
 
   try {
     await runTurn(line, { workspace, selfSurface, confirm, say });
   } catch (e) {
-    say(`error: ${(e as Error).message}`);
+    say(ui.warn(`error: ${(e as Error).message}`));
   }
 }
 
 rl.close();
-console.log("bye.");
+console.log(c.gray("bye."));

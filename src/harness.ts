@@ -11,6 +11,7 @@ import { selectAgent } from "./agents.ts";
 import { checkpoint } from "./git.ts";
 import { readPlan, recentGitLog } from "./workspace.ts";
 import { setStatus, log, type SurfaceRef } from "./cmux.ts";
+import { ui } from "./ui.ts";
 
 export interface TurnDeps {
   workspace: string;
@@ -31,22 +32,22 @@ export async function runTurn(input: string, deps: TurnDeps): Promise<void> {
 
   if (spec.task === null) {
     await setStatus("harness", "idle");
-    deps.say(spec.reply ?? "(no reply)");
+    deps.say(ui.reply(spec.reply ?? "(no reply)"));
     return;
   }
 
   const task = spec.task;
-  deps.say(`→ dispatch: ${task}`);
+  deps.say(ui.dispatch(task));
   if (!(await deps.confirm(task))) {
     await setStatus("harness", "idle");
-    deps.say("cancelled.");
+    deps.say(ui.warn("cancelled."));
     return;
   }
 
   const agent = selectAgent();
   await setStatus("harness", `running ${agent.name}`);
   await log(`dispatch to ${agent.name}: ${task}`);
-  deps.say(`running ${agent.name} in a new pane…`);
+  deps.say(ui.running(`running ${agent.name} in a new pane…`));
 
   const result = await runAgentStep({
     fromSurface: deps.selfSurface,
@@ -58,14 +59,14 @@ export async function runTurn(input: string, deps: TurnDeps): Promise<void> {
   await setStatus("harness", "idle");
 
   if (result.outcome === "stuck") {
-    deps.say(`⚠ ${agent.name} went silent (watchdog). [fallback comes in M4]`);
+    deps.say(ui.warn(`${agent.name} went silent (watchdog). [fallback comes in M4]`));
     return;
   }
   if (result.exitCode !== 0) {
-    deps.say(`⚠ ${agent.name} exited ${result.exitCode}. [fallback comes in M4]`);
+    deps.say(ui.warn(`${agent.name} exited ${result.exitCode}. [fallback comes in M4]`));
     return;
   }
 
   const hash = await checkpoint(deps.workspace, `${agent.name}: ${task}`);
-  deps.say(hash ? `✓ done — checkpoint ${hash}` : "✓ done — (no file changes to commit)");
+  deps.say(hash ? ui.ok(`done — checkpoint ${hash}`) : ui.ok("done — (no file changes to commit)"));
 }
