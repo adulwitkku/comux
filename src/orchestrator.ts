@@ -39,7 +39,7 @@ const TASK_SPEC_SCHEMA = {
   required: ["reply", "task"],
 } as const;
 
-function systemPrompt(ctx: IntentContext): string {
+export function buildSystemPrompt(ctx: IntentContext): string {
   return [
     "You are the Orchestrator of a coding harness. You do NOT write code or plan work.",
     "You only classify the user's message into ONE of two actions and reply with a single JSON object:",
@@ -70,7 +70,7 @@ function normalise(raw: TaskSpec): TaskSpec {
 
 export async function parseIntent(userInput: string, ctx: IntentContext): Promise<TaskSpec> {
   const messages: ChatMessage[] = [
-    { role: "system", content: systemPrompt(ctx) },
+    { role: "system", content: buildSystemPrompt(ctx) },
     { role: "user", content: userInput },
   ];
   const content = await chat(messages, {

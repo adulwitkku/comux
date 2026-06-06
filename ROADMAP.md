@@ -59,6 +59,11 @@ history (ADR-0003).
 and the chat answer is grounded in PLAN.md. The MLX runtime does not enforce `format`
 strictly, so parsing is defensive (ADR-0008).
 
+Routing quality is on par with a strong cloud model: `bun run compare:pi` runs the local
+Orchestrator and `pi` (cloud) as routers behind the *same* system prompt over 3 cases
+(chat / build / advice) — local scored 3/3, matching pi exactly, including correctly NOT
+dispatching an advice question. (Local Thai prose is rougher than pi's; routing is identical.)
+
 ### M3 — PLAN.md loop + git checkpoints
 Approve PLAN.md once up front, then walk it step by step: dispatch Agent → verify →
 `git commit` → tick the checklist. User can interject via the TUI between steps.

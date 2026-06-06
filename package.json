@@ -7,6 +7,7 @@
   "scripts": {
     "smoke:m1": "bun run scripts/smoke-m1.ts",
     "smoke:m2": "bun run scripts/smoke-m2.ts",
+    "compare:pi": "bun run scripts/compare-pi.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
