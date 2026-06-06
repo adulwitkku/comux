@@ -22,6 +22,9 @@ import {
 
 const EXIT_SENTINEL = /__CMUX_EXIT__=(\d+)/;
 
+/** Default silence threshold: a step is "stuck" after this long with no screen change. */
+export const DEFAULT_WATCHDOG_MS = 180_000;
+
 export interface StepOptions {
   /** Surface to split off (defaults to the harness's own surface). */
   fromSurface: SurfaceRef;
@@ -40,7 +43,7 @@ export type StepResult =
   | { outcome: "stuck"; surface: SurfaceRef };
 
 export async function runAgentStep(opts: StepOptions): Promise<StepResult> {
-  const watchdogMs = opts.watchdogMs ?? 120_000;
+  const watchdogMs = opts.watchdogMs ?? DEFAULT_WATCHDOG_MS;
   const pollMs = opts.pollMs ?? 1_000;
 
   const surface = await newSplit(opts.fromSurface, "down", false);

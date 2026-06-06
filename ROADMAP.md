@@ -7,7 +7,7 @@ design review. The original `prd.md` is kept for history.
 ## What this is
 
 A local-first system that runs inside **cmux**. A small local model (the **Orchestrator**,
-`gemma4:12b` via Ollama) parses user intent into a structured **task spec**. Deterministic
+`gemma4:12b-mlx` via Ollama) parses user intent into a structured **task spec**. Deterministic
 code then routes that task to a capable external coding **Agent** (Claude Code, Codex,
 Antigravity, Cursor), runs it visibly in a cmux pane, checkpoints progress in git, and
 falls over to the next available Agent when one is rate-limited.
@@ -65,16 +65,18 @@ Orchestrator and `pi` (cloud) as routers behind the *same* system prompt over 3 
 dispatching an advice question. (Local Thai prose is rougher than pi's; routing is identical.)
 
 ### M3 — Interactive TUI + dispatch loop — ✅ TUI working; autonomous PLAN-walk deferred
-A readline TUI (`bun run start`) where each message is parsed by the Orchestrator and either
-answered (REPLY) or dispatched to an Agent that runs visibly in a new cmux pane, after which
-the result is git-checkpointed in a separate **workspace** (Agents confined to their own repo,
-ADR-0005). `src/harness.ts` (`runTurn`), `src/workspace.ts`, `src/agents.ts` (pi as the agent;
+A raw-mode TUI (`bun run start`; `src/tui.ts`, with slash-commands, `@` file mentions and a
+status bar) where each message is parsed by the Orchestrator and either answered (REPLY) or
+dispatched to an Agent that runs visibly in a new cmux pane, after which the result is
+git-checkpointed in a separate **workspace** (Agents confined to their own repo, ADR-0005).
+`src/harness.ts` (`runTurn`), `src/workspace.ts`, `src/agents.ts` (pi as the agent;
 `selectAgent` is a placeholder until M4), `scripts/harness.ts` (TUI).
 
 Validated end-to-end: "create hello.txt" → DISPATCH → pi writes the file in a visible pane →
-checkpoint committed. A per-dispatch confirm is the human gate (`COMUX_YES=1` auto-approves
-for non-interactive runs). Still deferred to fold in with M4: the autonomous multi-step PLAN.md
-walk and Agents ticking the checklist.
+checkpoint committed. **Note:** for M3 the human gate is a *per-dispatch* confirm
+(`COMUX_YES=1` auto-approves), which is a temporary stand-in — ADR-0005's "approve the plan
+once, then run autonomously" lands with the autonomous multi-step PLAN.md walk in M4. Agents
+ticking the checklist is deferred to M4 too.
 
 ### M4 — Scheduler + cooldown
 Support 2+ Agents. On quota/rate-limit: switch immediately and mark the Agent cooling
@@ -97,7 +99,25 @@ configurable, not hardcoded.
 - **PLAN.md checklist** — the dispatched **Agent** ticks its own items; git remains the
   source of truth regardless. (ADR-0002)
 - **Watchdog timeout** — a silence timer: it resets on every new line of Agent output and
-  fires only after N seconds of *no* output (≠ a total job timeout).
+  fires only after `DEFAULT_WATCHDOG_MS` (180s) of *no* output (≠ a total job timeout).
+
+## Pre-open-source cleanup
+
+Tracked gaps where the docs/ADRs once described a settled state that the code has not yet
+reached. Ordered by impact:
+
+1. **Approve-once vs per-step confirm.** ADR-0005 decides "approve the plan once, then run
+   autonomously", but M3 ships a per-dispatch confirm. Land approve-once together with the
+   M4 autonomous PLAN-walk; until then ADR-0005 carries a status note.
+2. **Workspace confinement is enforced on macOS only.** `src/sandbox.ts` wraps each Agent
+   in `sandbox-exec` so it can only write inside the workspace (ADR-0005). On Linux/Windows
+   there is no enforcement yet — add a per-platform sandbox (e.g. bubblewrap/landlock) before
+   claiming the boundary cross-platform. Opt out with `COMUX_NO_SANDBOX=1`.
+3. **`gemma4:12b-mlx` is the one canonical model tag** (was inconsistently `gemma4:12b`).
+   Verify the tag exists in Ollama and that the `256k` context shown in the status bar matches
+   the model actually pulled.
+4. **Single Agent today.** The Agent chain (Claude Code → Codex → …) is the M4 target; the
+   registry currently holds only `pi`.
 
 ## Open sub-questions
 
@@ -108,4 +128,4 @@ configurable, not hardcoded.
 
 ## Stack
 
-TypeScript · Bun · Ollama (`gemma4:12b`) · cmux · git · (optional) Vanilla web for M6.
+TypeScript · Bun · Ollama (`gemma4:12b-mlx`) · cmux · git · (optional) Vanilla web for M6.

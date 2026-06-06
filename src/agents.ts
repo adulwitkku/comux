@@ -1,6 +1,11 @@
 // Agent registry. Each Agent knows how to turn a task instruction into a shell command
 // that runs it non-interactively in its working directory. Picking WHICH agent runs is the
 // Scheduler's job (ADR-0004); for M3 there is a single agent and a placeholder selector.
+//
+// Every built command is run through `confine` so the Agent can only write inside its
+// workspace repo (ADR-0005).
+
+import { confine } from "./sandbox.ts";
 
 export interface Agent {
   name: string;
@@ -18,7 +23,7 @@ function shq(s: string): string {
 export const pi: Agent = {
   name: "pi",
   buildCommand: (task, cwd) =>
-    `cd ${shq(cwd)} && pi -p --no-session ${shq(task)}`,
+    confine(`cd ${shq(cwd)} && pi -p --no-session ${shq(task)}`, cwd),
 };
 
 export const AGENTS: Agent[] = [pi];

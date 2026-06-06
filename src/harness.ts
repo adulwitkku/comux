@@ -6,7 +6,7 @@
 // step gated by the user (a simplified stand-in for ADR-0005's approve-once).
 
 import { parseIntent } from "./orchestrator.ts";
-import { runAgentStep } from "./agent-runner.ts";
+import { runAgentStep, DEFAULT_WATCHDOG_MS } from "./agent-runner.ts";
 import { selectAgent } from "./agents.ts";
 import { checkpoint } from "./git.ts";
 import { readPlan, recentGitLog } from "./workspace.ts";
@@ -52,7 +52,7 @@ export async function runTurn(input: string, deps: TurnDeps): Promise<void> {
   const result = await runAgentStep({
     fromSurface: deps.selfSurface,
     launchCommand: agent.buildCommand(task, deps.workspace),
-    watchdogMs: deps.watchdogMs ?? 180_000,
+    watchdogMs: deps.watchdogMs ?? DEFAULT_WATCHDOG_MS,
     closeOnEnd: false,
   });
 

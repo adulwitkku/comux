@@ -11,14 +11,15 @@ The whole local-first system: the deterministic plumbing plus the local model pl
 the artifacts view. The thing the user runs.
 
 **Orchestrator**:
-The small local model (gemma4:12b via Ollama). Its sole job is to turn natural-language
+The small local model (gemma4:12b-mlx via Ollama). Its sole job is to turn natural-language
 user input into a structured task spec. It does NOT make routing, fallback, or
 compaction decisions — those are deterministic code.
 _Avoid_: Brain (overstates its role — it does not plan autonomously)
 
 **Agent**:
-An external, more-capable coding CLI that does the actual work (Claude Code, Codex,
-Cursor, Antigravity). The "hands" of the system.
+An external, more-capable coding CLI that does the actual work. The "hands" of the system.
+Currently the only implemented Agent is `pi`; Claude Code, Codex, Cursor, and Antigravity
+are roadmap targets for the multi-Agent Scheduler (M4), not yet wired in.
 _Avoid_: Worker, CLI
 
 **Task spec**:
@@ -41,8 +42,9 @@ The shared plan and progress for the current job, kept as a checklist. The human
 source of "what's done / what remains" that any Agent can read.
 
 **Agent chain**:
-The preference order of Agents (Claude Code → Codex → Antigravity → Cursor, best-preferred
-first). It is a preference ranking for the Scheduler, NOT a one-way descent.
+The intended preference order of Agents (Claude Code → Codex → Antigravity → Cursor,
+best-preferred first). It is a preference ranking for the Scheduler, NOT a one-way descent.
+This is the M4 design target; today the registry holds a single Agent (`pi`).
 
 **Scheduler**:
 The deterministic logic that picks, at each step, the most-preferred Agent not currently in

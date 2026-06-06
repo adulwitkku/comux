@@ -12,5 +12,5 @@ cooldown (e.g. it asks for Claude while Claude is cooling down). The Harness att
 current PLAN.md step from its own walk, so no `plan_step` field is needed. A `thought`
 field is optional and for logging only.
 
-The open sub-question of *how* to force `gemma4:12b` to always emit valid JSON (structured
+The open sub-question of *how* to force `gemma4:12b-mlx` to always emit valid JSON (structured
 output / grammar-constrained decoding) is deferred to implementation.

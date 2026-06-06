@@ -62,7 +62,9 @@ ctrl+c to exit. Coding requests are dispatched to an Agent in a new pane and git
 | --- | --- | --- |
 | `COMUX_WORKSPACE` | `./workspace` | default workspace directory |
 | `COMUX_MODEL` | `gemma4:12b-mlx` | Ollama model for the Orchestrator |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL |
 | `COMUX_YES` | – | auto-approve dispatches (non-interactive runs) |
+| `COMUX_NO_SANDBOX` | – | disable the macOS write-confinement sandbox (ADR-0005) |
 
 ## Status
 
