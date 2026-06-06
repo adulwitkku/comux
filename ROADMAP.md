@@ -16,8 +16,10 @@ See `CONTEXT.md` for the glossary of every capitalised term below.
 
 ## Core principles (the "why")
 
-1. **The Orchestrator is a thin intent-parser, not a brain.** Routing, fallback, and
-   compaction are deterministic code — never the 12B model's judgement. (ADR-0003)
+1. **The Orchestrator is a thin intent-parser, not a brain — and now optional.** Routing,
+   fallback, and compaction are deterministic code — never the 12B model's judgement
+   (ADR-0003). The conductor is the deterministic Harness loop, not the LLM; the Orchestrator
+   is an optional front-door classifier and Ollama is an optional dependency (ADR-0010).
 2. **Agents run visibly; detection is out-of-band.** The user watches the real Agent TUI
    in a cmux pane. Failure is detected by exit code + watchdog timeout + tested sentinel
    strings — not loose regex on the visible text. (ADR-0001)
@@ -27,6 +29,10 @@ See `CONTEXT.md` for the glossary of every capitalised term below.
    preferred Agent not in cooldown; bounce back up when it recovers; wait (never quit)
    when all are exhausted. (ADR-0004)
 5. **Approve the plan once, then run autonomously, confined to the project repo.** (ADR-0005)
+6. **"Done" is a frozen machine check, not the Agent's word.** Each Step carries an Acceptance
+   check authored at plan time; a Step completes only when its check passes — not on exit-0
+   and not on the Agent's self-report. This is what makes the unattended walk and Handover
+   trustworthy. (ADR-0009)
 
 ## Explicitly cut from the original PRD
 
@@ -78,14 +84,39 @@ checkpoint committed. **Note:** for M3 the human gate is a *per-dispatch* confir
 once, then run autonomously" lands with the autonomous multi-step PLAN.md walk in M4. Agents
 ticking the checklist is deferred to M4 too.
 
-### M4 — Scheduler + cooldown
+### M3.5 — Autonomous verified PLAN-walk (single Agent) — ⭐ the real next milestone / MVP
+The keystone the original plan skipped: today `runTurn` is single-shot (one parse → one
+dispatch → one checkpoint), and nothing authors a multi-step PLAN.md. M3.5 closes that gap
+with a **single** Agent and no Scheduler:
+
+1. **Plan dispatch** — a capable Agent decomposes the request into Steps, each with a frozen
+   Acceptance check, and writes PLAN.md (authoring is the Agent's job, not the Orchestrator's).
+2. **Walk loop** (deterministic) — for each unchecked Step: dispatch the implementation → run
+   the Step's Acceptance check → on pass, tick + `git checkpoint`; on fail, retry once.
+3. Approve the plan **once** up front, then run autonomously (lands ADR-0005's approve-once,
+   replacing M3's per-dispatch confirm).
+
+This delivers standalone value at N=1 (autonomous, check-verified, git-safe, visible coding —
+no second subscription needed) and is the prerequisite for everything below: there is nothing
+to hand over or schedule until a multi-Step walk exists. Demote the Orchestrator to an optional
+front-door here (ADR-0010).
+
+### M5-spike — Prove Handover quality (cheapest risky thing) — ⚠️ gate before M4
+Wire a **second** Agent and, by hand, hand a half-finished job from Agent A to Agent B mid-walk:
+B reads the repo + PLAN.md and must satisfy the failed Step's *frozen* Acceptance check. The
+make-or-break question is whether a heterogeneous Agent resumes cold-from-git work to an
+acceptable standard. If it does, build the Scheduler; if not, multi-Agent failover is worthless
+and we just saved building M4. (Proving "the riskiest thing first" — same principle as M1.)
+
+### M4 — Scheduler + cooldown (only if the M5-spike passes)
 Support 2+ Agents. On quota/rate-limit: switch immediately and mark the Agent cooling
 down. On error/stuck: retry the same Agent once, then switch. Bounce back to a stronger
 Agent when its cooldown resets. When all are exhausted: wait and resume.
 
-### M5 — Handover
-On switch, the incoming Agent reads the repo + PLAN.md and resumes from the last commit,
-instructed to read files before editing. No Orchestrator-from-memory briefing.
+### M5 — Handover (productionise the spike)
+On switch, the incoming Agent reads the repo + PLAN.md and resumes the failed Step from the
+last commit, instructed to read files before editing and to satisfy that Step's frozen
+Acceptance check. No Orchestrator-from-memory briefing.
 
 ### M6 — Rich web view (optional, later)
 If a file-explorer / image-rendering view is still wanted, build a Bun web app and open it
@@ -96,8 +127,12 @@ configurable, not hardcoded.
 
 - **Task spec schema** — minimal `{reply, task}`, exactly one field set; names the work,
   not the Agent. (ADR-0006)
-- **PLAN.md checklist** — the dispatched **Agent** ticks its own items; git remains the
-  source of truth regardless. (ADR-0002)
+- **PLAN.md checklist** — each item is a **Step** paired with a frozen **Acceptance check**;
+  the Harness ticks the item only when the check passes (not the Agent's say-so, ADR-0009).
+  Git remains the source of truth regardless. (ADR-0002)
+- **Who the harness is for** — one product: a *local conductor that runs cloud Agents* on long,
+  unattended, check-verified, git-safe jobs you can watch. Value at N=1 Agent (autonomous
+  verified walk); multi-Agent failover is the moat for those who hit rate-limits (N≥2).
 - **Watchdog timeout** — a silence timer: it resets on every new line of Agent output and
   fires only after `DEFAULT_WATCHDOG_MS` (180s) of *no* output (≠ a total job timeout).
 

@@ -13,8 +13,12 @@ the artifacts view. The thing the user runs.
 **Orchestrator**:
 The small local model (gemma4:12b-mlx via Ollama). Its sole job is to turn natural-language
 user input into a structured task spec. It does NOT make routing, fallback, or
-compaction decisions — those are deterministic code.
-_Avoid_: Brain (overstates its role — it does not plan autonomously)
+compaction decisions — those are deterministic code. It is an **optional front-door
+classifier** (chat vs job), not the conductor: the autonomous run is driven by deterministic
+local code (the Harness), so the Orchestrator can be swapped for a heuristic and Ollama made
+an optional dependency.
+_Avoid_: Brain (overstates its role — it does not plan autonomously); Conductor (the
+deterministic Harness loop is the conductor, not the model)
 
 **Agent**:
 An external, more-capable coding CLI that does the actual work. The "hands" of the system.
@@ -30,16 +34,36 @@ Scheduler picks the Agent. The only artifact the Orchestrator is responsible for
 
 **Handover**:
 The transfer of an in-progress job from a failed/exhausted Agent to the next Agent in
-the chain. Resumes from the last Git checkpoint; the incoming Agent reads the repo and
-PLAN.md rather than being briefed from the Orchestrator's memory.
+the chain. Resumes the failed Step from the last Git checkpoint; the incoming Agent reads
+the repo and PLAN.md and must satisfy that Step's frozen Acceptance check, rather than being
+briefed from the Orchestrator's memory.
 
 **Checkpoint**:
 A Git commit made by the Harness after a successful step. The unit of safe resume and
 revert.
 
 **PLAN.md**:
-The shared plan and progress for the current job, kept as a checklist. The human-readable
-source of "what's done / what remains" that any Agent can read.
+The shared plan and progress for the current job, kept as a checklist of Steps. The
+human-readable source of "what's done / what remains" that any Agent can read.
+
+**Step**:
+The unit of work — and the unit of Handover. One PLAN.md checklist item paired with its
+Acceptance check. A job is an ordered list of Steps; the Harness walks them one at a time,
+dispatching each to an Agent. A Step's size is "as small as you can write a check for".
+
+**Acceptance check**:
+A deterministic, machine-runnable test attached to a Step (e.g. `bun run typecheck`, a unit
+test, a `grep`). A Step is "done" only when its check passes — not when the Agent's process
+exits 0 and not on the Agent's own say-so. It is authored at plan time and **frozen** before
+implementation (so the implementing Agent cannot grade its own homework), and it is
+Agent-independent, which is what makes Handover safe: the incoming Agent must satisfy the
+same frozen check.
+
+**Plan dispatch**:
+The first dispatch of a job, where a capable Agent decomposes the request into Steps — each
+with its frozen Acceptance check — and writes PLAN.md. Distinct from the implementation
+dispatches that follow. Authoring the plan is the Agent's job, never the Orchestrator's
+(it names work, not plans — see Task spec).
 
 **Agent chain**:
 The intended preference order of Agents (Claude Code → Codex → Antigravity → Cursor,
