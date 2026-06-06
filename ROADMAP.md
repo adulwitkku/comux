@@ -130,6 +130,14 @@ Support 2+ Agents. On quota/rate-limit: switch immediately and mark the Agent co
 down. On error/stuck: retry the same Agent once, then switch. Bounce back to a stronger
 Agent when its cooldown resets. When all are exhausted: wait and resume.
 
+**Open design fork (decide before building).** `runAgentStep` today returns only
+`completed(exitCode)` / `stuck` — it cannot yet tell a *quota/rate-limit* exit (→ cooldown +
+switch) from an ordinary *error* exit (→ retry same Agent). Resolving this is the first M4 task.
+Candidates: (a) **tested per-Agent sentinels** read off the screen (matches ADR-0001's "tested
+sentinels, not loose regex", but needs upkeep per Agent CLI); (b) **exit code only** (simplest,
+but loses cooldown/bounce-back); (c) **per-Agent exit-code mapping** if `pi`/`claude` use a
+distinct code on quota — needs a quick spike to find out. Leaning (a)+(c). Not yet decided.
+
 ### M5 — Handover (productionise the spike)
 On switch, the incoming Agent reads the repo + PLAN.md and resumes the failed Step from the
 last commit, instructed to read files before editing and to satisfy that Step's frozen
