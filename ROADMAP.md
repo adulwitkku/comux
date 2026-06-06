@@ -84,7 +84,7 @@ checkpoint committed. **Note:** for M3 the human gate is a *per-dispatch* confir
 once, then run autonomously" lands with the autonomous multi-step PLAN.md walk in M4. Agents
 ticking the checklist is deferred to M4 too.
 
-### M3.5 — Autonomous verified PLAN-walk (single Agent) — ✅ implemented; live walk pending
+### M3.5 — Autonomous verified PLAN-walk (single Agent) — ✅ implemented & validated
 The keystone the original plan skipped: `runTurn` used to be single-shot (one parse → one
 dispatch → one checkpoint), and nothing authored a multi-step PLAN.md. M3.5 closes that gap
 with a **single** Agent and no Scheduler:
@@ -103,9 +103,12 @@ to hand over or schedule until a multi-Step walk exists.
 Implemented in `src/plan.ts` (PLAN.md format + parser + tick + the plan/step prompts),
 `src/check.ts` (the Acceptance-check runner, confined per ADR-0005), and `src/harness.ts`
 (`runTurn` → `planJob` → `walkPlan`). The deterministic core (parse / tick / check) is gated by
-`bun run smoke:m3`; the Agent-driven plan→walk loop still needs an end-to-end run against a live
-cmux + Ollama + `pi`. Still open: demoting the Orchestrator to an optional front-door (ADR-0010)
-is not done yet — `runTurn` still parses every message through it.
+`bun run smoke:m3`. The full Agent-driven loop is validated end-to-end against a live cmux +
+Ollama + `pi` by `bun run scripts/live-m3.ts` — a happy-path 2-step job: gemma routed the
+request, `pi` authored PLAN.md with a `grep -q` check per step, and each step was checkpointed
+only after its check passed (3 commits: plan + 2 steps). Not yet exercised live: the retry/stuck
+paths. Still open: demoting the Orchestrator to an optional front-door (ADR-0010) — `runTurn`
+still parses every message through it.
 
 ### M5-spike — Prove Handover quality (cheapest risky thing) — ⚠️ gate before M4
 Wire a **second** Agent and, by hand, hand a half-finished job from Agent A to Agent B mid-walk:

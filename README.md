@@ -70,10 +70,10 @@ ctrl+c to exit. Coding requests are dispatched to an Agent in a new pane and git
 
 **M1–M3 are implemented and validated**: interactive TUI → local routing → visible Agent run
 → git checkpoint. **M3.5** (autonomous, check-verified PLAN-walk with a single Agent: plan →
-approve once → walk, gating each step on a frozen acceptance check) is implemented — its
-deterministic core is covered by `smoke:m3`; the live walk still needs an end-to-end run.
-Proving Handover quality with a second Agent, then the Scheduler (M4), comes next. See
-[`ROADMAP.md`](./ROADMAP.md).
+approve once → walk, gating each step on a frozen acceptance check) is implemented and
+validated end-to-end against a live cmux + Ollama + `pi` (its deterministic core is also
+covered by `smoke:m3`). Proving Handover quality with a second Agent, then the Scheduler (M4),
+comes next. See [`ROADMAP.md`](./ROADMAP.md).
 
 ## Docs
 
