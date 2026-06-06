@@ -10,9 +10,9 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { identifySelf } from "../src/cmux.ts";
-import { ensureWorkspace, readPlan, currentBranch } from "../src/workspace.ts";
+import { ensureWorkspace, readPlan, currentBranch, listFiles } from "../src/workspace.ts";
 import { runTurn } from "../src/harness.ts";
-import { Tui, type Command } from "../src/tui.ts";
+import { Tui, type Item } from "../src/tui.ts";
 import { lastStats } from "../src/llm.ts";
 import { c } from "../src/ui.ts";
 
@@ -24,7 +24,7 @@ const selfSurface = await identifySelf();
 const model = process.env.HARNESS_MODEL ?? "gemma4:12b-mlx";
 const autoYes = !!process.env.HARNESS_YES;
 
-const commands: Command[] = [
+const commands: Item[] = [
   { name: "/plan", desc: "show PLAN.md" },
   { name: "/ws", desc: "show workspace path" },
   { name: "/help", desc: "keybindings & commands" },
@@ -46,7 +46,7 @@ function statusBar(): string {
   return `${loc}  ${c.gray("·")}  ${ctx}  ${c.gray("·")}  ${m}  ${c.gray("·")}  ${tps}`;
 }
 
-const tui = new Tui({ commands, status: statusBar });
+const tui = new Tui({ commands, status: statusBar, listFiles: () => listFiles(workspace) });
 const say = (m: string) => tui.print(m);
 const confirm = async (_task: string) => (autoYes ? true : tui.confirm("รันงานนี้เลยไหม?"));
 

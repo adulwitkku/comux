@@ -1,7 +1,7 @@
 // The workspace: the git repo Agents work inside. Kept separate from the harness repo so
 // Agents are confined to their own project (ADR-0005) and the harness stays clean.
 
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -38,4 +38,29 @@ export async function recentGitLog(dir: string, n = 5): Promise<string> {
 export function currentBranch(dir: string): string {
   const r = Bun.spawnSync(["git", "branch", "--show-current"], { cwd: dir });
   return r.stdout.toString().trim() || "—";
+}
+
+const SKIP_DIRS = new Set([".git", "node_modules", ".DS_Store"]);
+
+/** Relative file paths under `dir` (for `@` file mentions), skipping noise dirs. */
+export function listFiles(dir: string, max = 2000): string[] {
+  const out: string[] = [];
+  const walk = (rel: string): void => {
+    if (out.length >= max) return;
+    let entries;
+    try {
+      entries = readdirSync(join(dir, rel), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (SKIP_DIRS.has(e.name)) continue;
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(r);
+      else out.push(r);
+      if (out.length >= max) return;
+    }
+  };
+  walk("");
+  return out;
 }
