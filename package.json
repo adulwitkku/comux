@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Local-first AI orchestrator harness that runs inside cmux",
   "scripts": {
+    "start": "bun run scripts/harness.ts",
     "smoke:m1": "bun run scripts/smoke-m1.ts",
     "smoke:m2": "bun run scripts/smoke-m2.ts",
     "compare:pi": "bun run scripts/compare-pi.ts",

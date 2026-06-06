@@ -64,9 +64,17 @@ Orchestrator and `pi` (cloud) as routers behind the *same* system prompt over 3 
 (chat / build / advice) — local scored 3/3, matching pi exactly, including correctly NOT
 dispatching an advice question. (Local Thai prose is rougher than pi's; routing is identical.)
 
-### M3 — PLAN.md loop + git checkpoints
-Approve PLAN.md once up front, then walk it step by step: dispatch Agent → verify →
-`git commit` → tick the checklist. User can interject via the TUI between steps.
+### M3 — Interactive TUI + dispatch loop — ✅ TUI working; autonomous PLAN-walk deferred
+A readline TUI (`bun run start`) where each message is parsed by the Orchestrator and either
+answered (REPLY) or dispatched to an Agent that runs visibly in a new cmux pane, after which
+the result is git-checkpointed in a separate **workspace** (Agents confined to their own repo,
+ADR-0005). `src/harness.ts` (`runTurn`), `src/workspace.ts`, `src/agents.ts` (pi as the agent;
+`selectAgent` is a placeholder until M4), `scripts/harness.ts` (TUI).
+
+Validated end-to-end: "create hello.txt" → DISPATCH → pi writes the file in a visible pane →
+checkpoint committed. A per-dispatch confirm is the human gate (`HARNESS_YES=1` auto-approves
+for non-interactive runs). Still deferred to fold in with M4: the autonomous multi-step PLAN.md
+walk and Agents ticking the checklist.
 
 ### M4 — Scheduler + cooldown
 Support 2+ Agents. On quota/rate-limit: switch immediately and mark the Agent cooling

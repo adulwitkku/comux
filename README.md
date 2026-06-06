@@ -15,21 +15,32 @@ falls over to the next available Agent when one is rate-limited.
 
 ## Status
 
-**M1 (the make-or-break spike) is implemented and validated.** The harness can launch an
-Agent in a visible cmux pane, detect completion + exit code, run a silence watchdog, and
-git-checkpoint the result — all proven against the real cmux.
+**M1–M3 are implemented and validated.** The harness has an interactive TUI: you type, a local
+model routes the message, and coding tasks are dispatched to an Agent that runs visibly in a
+cmux pane, with the result git-checkpointed. See [`ROADMAP.md`](./ROADMAP.md) for details.
 
 ## Requirements
 
 - [Bun](https://bun.sh) ≥ 1.3
 - a running cmux (the harness shells out to the `cmux` CLI; see ADR-0007)
+- [Ollama](https://ollama.com) serving `gemma4:12b-mlx` (the Orchestrator)
+- an Agent CLI on PATH — currently [`pi`](https://pi.dev)
 
-## Run the M1 smoke test
+## Run the TUI
 
 ```bash
 bun install
-bun run smoke:m1
+bun run start                 # workspace defaults to ./workspace
+bun run start /path/to/repo   # or point it at a specific repo
 ```
 
-It spins up a fake Agent (a plain shell command) in a cmux pane inside a throwaway git repo,
-and checks completion/exit-code capture, git checkpointing, and stuck-detection.
+Type a message. `/help` lists commands. Set `HARNESS_YES=1` to auto-approve dispatches.
+
+## Smoke tests
+
+```bash
+bun run smoke:m1      # visible agent run + exit code + watchdog + checkpoint
+bun run smoke:m2      # Orchestrator routing (chat -> reply, build -> task)
+bun run compare:pi    # local Orchestrator vs pi (cloud) as routers
+bun run try "msg"     # throw one message at the Orchestrator (add --pi to compare)
+```
