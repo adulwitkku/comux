@@ -1,11 +1,15 @@
-// Interactive TUI for the harness (M3). Type a message: the Orchestrator either answers,
-// or dispatches the work to an Agent that runs visibly in a new cmux pane, after which the
-// result is git-checkpointed in the workspace.
+#!/usr/bin/env bun
+// comux — a local-first AI orchestrator that runs coding agents visibly inside cmux.
 //
-//   bun run start                 # workspace defaults to ./workspace
-//   bun run start /path/to/repo   # use a specific workspace
+// A small local model (the Orchestrator, gemma4:12b via Ollama) turns your message into a
+// minimal task spec; deterministic code routes coding work to an Agent that runs visibly in a
+// new cmux pane, then git-checkpoints the result in the workspace.
 //
-// Commands:  /plan  show PLAN.md   ·   /ws  show workspace   ·   /help   ·   /exit
+//   comux                  # workspace defaults to ./workspace (under the current dir)
+//   comux /path/to/repo    # use a specific repo as the workspace
+//   comux --version | --help
+//
+// In the TUI:  type to chat · "/" commands · "@" file mentions · ⏎ run · ctrl+c exit
 
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -14,15 +18,43 @@ import { ensureWorkspace, readPlan, currentBranch, listFiles } from "../src/work
 import { runTurn } from "../src/harness.ts";
 import { Tui, type Item } from "../src/tui.ts";
 import { lastStats } from "../src/llm.ts";
+import { VERSION } from "../src/version.ts";
 import { c } from "../src/ui.ts";
 
-const wsArg = process.argv[2];
+const args = process.argv.slice(2);
+
+if (args.includes("--version") || args.includes("-v")) {
+  console.log(`comux ${VERSION}`);
+  process.exit(0);
+}
+if (args.includes("--help") || args.includes("-h")) {
+  console.log(
+    [
+      `comux ${VERSION} — local-first AI orchestrator for cmux`,
+      "",
+      "Usage:",
+      "  comux [workspace]   launch the TUI (workspace defaults to ./workspace)",
+      "  comux --version     print version and exit",
+      "  comux --help        show this help and exit",
+      "",
+      "Environment:",
+      "  COMUX_WORKSPACE   default workspace directory",
+      "  COMUX_MODEL       Ollama model (default: gemma4:12b-mlx)",
+      "  COMUX_YES         auto-approve dispatches (non-interactive)",
+      "",
+      "Needs a running cmux, Ollama serving the model, and an Agent CLI (pi) on PATH.",
+    ].join("\n"),
+  );
+  process.exit(0);
+}
+
+const wsArg = args.find((a) => !a.startsWith("-"));
 const workspace = await ensureWorkspace(
-  wsArg ?? process.env.HARNESS_WORKSPACE ?? join(import.meta.dir, "..", "workspace"),
+  wsArg ?? process.env.COMUX_WORKSPACE ?? join(process.cwd(), "workspace"),
 );
 const selfSurface = await identifySelf();
-const model = process.env.HARNESS_MODEL ?? "gemma4:12b-mlx";
-const autoYes = !!process.env.HARNESS_YES;
+const model = process.env.COMUX_MODEL ?? "gemma4:12b-mlx";
+const autoYes = !!process.env.COMUX_YES;
 
 const commands: Item[] = [
   { name: "/plan", desc: "show PLAN.md" },

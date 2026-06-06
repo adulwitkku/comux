@@ -1,11 +1,39 @@
 {
-  "name": "cmux-orchestrator-harness",
-  "version": "0.0.1",
-  "private": true,
+  "name": "comux",
+  "version": "0.1.0",
+  "description": "Local-first AI orchestrator that runs coding agents visibly inside cmux",
+  "license": "MIT",
   "type": "module",
-  "description": "Local-first AI orchestrator harness that runs inside cmux",
+  "homepage": "https://github.com/adulwitkku/comux",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adulwitkku/comux.git"
+  },
+  "bugs": {
+    "url": "https://github.com/adulwitkku/comux/issues"
+  },
+  "keywords": [
+    "cmux",
+    "ai",
+    "agent",
+    "orchestrator",
+    "ollama",
+    "local-first",
+    "tui",
+    "coding-agent"
+  ],
+  "bin": {
+    "comux": "scripts/harness.ts"
+  },
+  "files": [
+    "src",
+    "scripts",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "bun run scripts/harness.ts",
+    "build": "bun build scripts/harness.ts --compile --outfile dist/comux",
     "smoke:m1": "bun run scripts/smoke-m1.ts",
     "smoke:m2": "bun run scripts/smoke-m2.ts",
     "compare:pi": "bun run scripts/compare-pi.ts",

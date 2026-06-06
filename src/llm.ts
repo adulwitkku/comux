@@ -25,7 +25,7 @@ export interface ChatOptions {
 
 const DEFAULTS = {
   baseUrl: process.env.OLLAMA_HOST ?? "http://localhost:11434",
-  model: process.env.HARNESS_MODEL ?? "gemma4:12b-mlx",
+  model: process.env.COMUX_MODEL ?? "gemma4:12b-mlx",
 };
 
 /** One non-streaming chat completion; returns the assistant message content. */

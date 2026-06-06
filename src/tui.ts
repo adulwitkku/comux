@@ -14,6 +14,7 @@
 // zero-width).
 
 import { c } from "./ui.ts";
+import { VERSION } from "./version.ts";
 
 export interface Item {
   name: string;
@@ -109,7 +110,7 @@ export class Tui {
   }
 
   printHeader(): void {
-    this.print(c.magenta(c.bold("◆ cmux harness")) + c.gray("  v0.0.1"));
+    this.print(c.magenta(c.bold("◆ comux")) + c.gray(`  v${VERSION}`));
     this.print(
       c.gray("ctrl+c/ctrl+d exit · ") +
         c.gray("/") + c.gray(" commands · ") +

@@ -1,4 +1,4 @@
-# cmux-Native AI Orchestrator Harness — Development Roadmap
+# comux — Development Roadmap
 
 This roadmap supersedes the phase plan in [`prd.md`](./prd.md). It reflects the design
 decisions recorded in [`CONTEXT.md`](./CONTEXT.md) and [`docs/adr/`](./docs/adr/) after a
@@ -72,7 +72,7 @@ ADR-0005). `src/harness.ts` (`runTurn`), `src/workspace.ts`, `src/agents.ts` (pi
 `selectAgent` is a placeholder until M4), `scripts/harness.ts` (TUI).
 
 Validated end-to-end: "create hello.txt" → DISPATCH → pi writes the file in a visible pane →
-checkpoint committed. A per-dispatch confirm is the human gate (`HARNESS_YES=1` auto-approves
+checkpoint committed. A per-dispatch confirm is the human gate (`COMUX_YES=1` auto-approves
 for non-interactive runs). Still deferred to fold in with M4: the autonomous multi-step PLAN.md
 walk and Agents ticking the checklist.
 

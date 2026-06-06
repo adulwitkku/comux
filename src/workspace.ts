@@ -19,7 +19,7 @@ export async function ensureWorkspace(dir: string): Promise<string> {
     await git(["init", "-q"], dir);
     // Local identity so the harness can commit even on a fresh machine.
     await git(["config", "user.email", "harness@local"], dir);
-    await git(["config", "user.name", "cmux harness"], dir);
+    await git(["config", "user.name", "comux"], dir);
   }
   return dir;
 }
