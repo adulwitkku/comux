@@ -7,3 +7,6 @@ dist/
 .env
 .env.local
 bun.lockb
+
+# agent-local tooling rules (e.g. RTK), not part of comux
+.agents/

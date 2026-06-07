@@ -12,10 +12,11 @@ const ctx: IntentContext = {
   gitLog: "726a1a8 M2: thin Orchestrator\ne13de99 M1: visible agent runner",
 };
 
-const cases: { name: string; input: string; expect: "reply" | "task" }[] = [
-  { name: "chat/status", input: "ตอนนี้โปรเจกต์ทำถึงไหนแล้ว", expect: "reply" },
-  { name: "clear build", input: "เพิ่มระบบ login ด้วย JWT ในหน้า settings", expect: "task" },
-  { name: "advice (ambiguous)", input: "ปุ่ม dark mode ควรเก็บค่าไว้ใน localStorage ไหม", expect: "reply" },
+// ADR-0018: every message dispatches, so we compare the chosen Capability, not reply-vs-task.
+const cases: { name: string; input: string; expect: "chat" | "coding" }[] = [
+  { name: "chat/status", input: "ตอนนี้โปรเจกต์ทำถึงไหนแล้ว", expect: "chat" },
+  { name: "clear build", input: "เพิ่มระบบ login ด้วย JWT ในหน้า settings", expect: "coding" },
+  { name: "advice (ambiguous)", input: "ปุ่ม dark mode ควรเก็บค่าไว้ใน localStorage ไหม", expect: "chat" },
 ];
 
 /** Run pi as a router with our exact system prompt; parse its output into a TaskSpec. */
@@ -30,8 +31,8 @@ async function piRoute(input: string): Promise<TaskSpec> {
   return extractJson<TaskSpec>(out);
 }
 
-function kind(s: TaskSpec): "reply" | "task" {
-  return s.task !== null ? "task" : "reply";
+function kind(s: TaskSpec): string {
+  return s.capability;
 }
 
 let agree = 0;
@@ -55,8 +56,8 @@ for (const c of cases) {
 
   console.log(`\n=== ${c.name} ===  expect: ${c.expect}`);
   console.log(`  input: ${c.input}`);
-  console.log(`  ours (gemma4:12b-mlx): ${oursKind}  ${ours.task ?? ours.reply}`);
-  console.log(`  pi   (cloud)         : ${piKind}  ${pi ? (pi.task ?? pi.reply) : "—"}`);
+  console.log(`  ours (gemma4:12b-mlx): ${oursKind}  ${ours.task}`);
+  console.log(`  pi   (cloud)         : ${piKind}  ${pi ? pi.task : "—"}`);
 }
 
 console.log(`\n— summary —`);

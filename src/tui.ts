@@ -230,6 +230,37 @@ export class Tui {
     });
   }
 
+  /**
+   * Present a numbered multiple-choice question and read one selection (Grilling, ADR-0016/0019).
+   * Option 0 is the recommended/default — Enter selects it. Resolves the chosen index.
+   */
+  choose(question: string, options: string[]): Promise<number> {
+    return new Promise((resolve) => {
+      const stdin = process.stdin;
+      process.stdout.write(c.yellow("  " + question) + "\n");
+      options.forEach((o, i) =>
+        process.stdout.write(`    ${c.cyan(String(i + 1))}. ${o}${i === 0 ? c.gray(" (recommended)") : ""}\n`),
+      );
+      process.stdout.write(c.gray("  pick 1–" + options.length + " [⏎ = 1]: "));
+      const onData = (s: string) => {
+        const n = Number(s);
+        let idx: number | null = null;
+        if (s === "\r" || s === "\n") idx = 0;
+        else if (Number.isInteger(n) && n >= 1 && n <= options.length) idx = n - 1;
+        if (idx === null) return; // ignore other keys, keep waiting
+        stdin.setRawMode(false);
+        stdin.removeListener("data", onData);
+        stdin.pause();
+        process.stdout.write("\n");
+        resolve(idx);
+      };
+      stdin.setRawMode(true);
+      stdin.resume();
+      stdin.setEncoding("utf8");
+      stdin.on("data", onData);
+    });
+  }
+
   /** Read a single y/n keypress. */
   confirm(question: string): Promise<boolean> {
     return new Promise((resolve) => {

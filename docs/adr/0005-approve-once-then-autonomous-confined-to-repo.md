@@ -1,5 +1,9 @@
 # One plan approval up front, then autonomous; Agents confined to the project repo
 
+> **Status:** the *approve-once gate* is superseded by ADR-0016 (Continuous grilling + Bypass
+> mode). The *write-confinement to the repo* below still stands — and becomes the primary safety
+> boundary now that default Bypass mode removes the human gate.
+
 The user approves PLAN.md once at the start, then the Harness runs the job autonomously
 — stepping and committing without asking per step — to satisfy the "never-stops / 20+
 step" goal. Per-step approval is rejected because it would defeat unattended long runs.

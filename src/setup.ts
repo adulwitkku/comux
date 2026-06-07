@@ -26,19 +26,36 @@ export interface SetupResult {
   /** Agent names referenced by a chain whose CLI is not installed. */
   missingInChains: string[];
   config: Config;
+  /** Whether `cmux hooks setup` ran cleanly (ADR-0015: hooks feed completion detection). */
+  hooksInstalled: boolean;
+}
+
+/**
+ * Install cmux agent hooks (ADR-0015) so cmux tracks each Agent's lifecycle (idle / needsInput)
+ * and the Feed publishes its decisions — the signal the Harness keys completion off. Best-effort:
+ * cmux skips Agents whose binary is not on PATH and prints its own summary.
+ */
+export async function installCmuxHooks(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn(["cmux", "hooks", "setup", "--yes"], { stdout: "pipe", stderr: "pipe" });
+    return (await proc.exited) === 0;
+  } catch {
+    return false;
+  }
 }
 
 export async function runSetup(): Promise<SetupResult> {
   const agents = detectAgents();
   const installed = new Set(agents.filter((a) => a.installed).map((a) => a.name));
 
-  const config: Config = { chains: structuredClone(DEFAULT_CHAINS) };
+  const config: Config = { chains: structuredClone(DEFAULT_CHAINS), bypass: true };
 
   const missing = new Set<string>();
   for (const names of Object.values(config.chains)) {
     for (const n of names) if (!installed.has(n)) missing.add(n);
   }
 
+  const hooksInstalled = await installCmuxHooks();
   const path = await saveConfig(config);
-  return { path, agents, missingInChains: [...missing], config };
+  return { path, agents, missingInChains: [...missing], config, hooksInstalled };
 }

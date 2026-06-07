@@ -91,5 +91,14 @@ export function extractJson<T = unknown>(raw: string): T {
   if (start === -1 || end === -1 || end < start) {
     throw new Error(`no JSON object in model output: ${raw.slice(0, 200)}`);
   }
-  return JSON.parse(body.slice(start, end + 1)) as T;
+  const parsed: unknown = JSON.parse(body.slice(start, end + 1));
+  // The MLX backend sometimes emits object keys with stray surrounding whitespace
+  // (e.g. `" task"`, `" capability"`), which would silently miss every field lookup. Trim the
+  // top-level keys so callers see the keys they expect (ADR-0008: normalise, don't trust).
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const trimmed: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) trimmed[k.trim()] = v;
+    return trimmed as T;
+  }
+  return parsed as T;
 }

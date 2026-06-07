@@ -1,76 +1,17 @@
-// Confine an Agent's process so it can only WRITE inside its workspace repo (ADR-0005).
+// Confinement is intentionally a no-op (ADR-0017).
 //
-// Agents run unattended and edit files automatically, so "the working directory is the
-// repo" is not enough on its own — nothing stops a process from writing an absolute path
-// or `cd ..`. On macOS we wrap the launch command with `sandbox-exec`: reads stay
-// unrestricted, but writes are denied everywhere except the workspace (plus the few dirs
-// an Agent legitimately needs — temp, /dev, and its own cache/config).
+// ADR-0005 once wrapped every Agent launch in `sandbox-exec` so it could only write inside its
+// workspace. That boundary was hollowed out by two later decisions: ADR-0016 made Bypass mode
+// default-on (zero human gates) and Phase 3 has Agents drive cmux directly — and the sandbox
+// never covered cmux/network/spawn anyway, only file writes. A write-only sandbox guarding a side
+// door while the front door stands open was safety theatre, so ADR-0017 drops it: the orchestrated
+// flow runs Agents unconfined, exactly as Broadcast mode already does (ADR-0014).
 //
-// This is a real boundary on the documented primary platform (darwin). On other platforms
-// `sandbox-exec` does not exist, so we fall back to working-directory confinement only and
-// say so — see ADR-0005. Opt out anywhere with COMUX_NO_SANDBOX=1.
+// The safety story is now: trusted Agents + the frozen Acceptance check (ADR-0009) + Git
+// checkpoints for revert (ADR-0002). `confine` is kept as an identity function so existing call
+// sites (agents.ts, check.ts) need no change and a future re-introduction has one seam.
 
-import { realpathSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-
-/** Single-quote a string for safe use inside a shell command. */
-function shq(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
-
-/** Resolve symlinks where possible; fall back to the raw path. */
-function real(p: string): string {
-  try {
-    return realpathSync(p);
-  } catch {
-    return p;
-  }
-}
-
-/** Double-quote a path for use inside a sandbox profile S-expression. */
-function profilePath(p: string): string {
-  return `"${p.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-/**
- * Wrap an Agent launch command so it can only write inside `workspace`. Returns the
- * command unchanged when confinement is disabled or unavailable on this platform.
- */
-export function confine(launch: string, workspace: string): string {
-  if (process.env.COMUX_NO_SANDBOX) return launch;
-  if (process.platform !== "darwin") return launch; // enforced on macOS only (ADR-0005)
-
-  const home = homedir();
-  // Dirs the Agent may write to: the repo, temp, /dev, and common per-user cache/config.
-  const writable = [
-    real(workspace),
-    real(tmpdir()),
-    "/private/tmp",
-    "/private/var/folders",
-    "/dev",
-    join(home, ".cache"),
-    join(home, ".config"),
-    join(home, ".local"),
-    join(home, ".pi"),
-    // Agent CLIs keep their session/config in the home dir; allow each Agent's own store.
-    join(home, ".claude"),
-    join(home, ".claude.json"),
-    join(home, ".codex"),
-    join(home, ".cursor"),
-    join(home, ".cursor-agent"),
-    join(home, ".agy"),
-    join(home, ".opencode"),
-    join(home, ".local", "share"),
-  ];
-
-  // Last-match-wins: allow everything, drop all writes, then re-allow the writable subpaths.
-  const profile = [
-    "(version 1)",
-    "(allow default)",
-    "(deny file-write*)",
-    ...writable.map((p) => `(allow file-write* (subpath ${profilePath(p)}))`),
-  ].join("\n");
-
-  return `sandbox-exec -p ${shq(profile)} sh -c ${shq(launch)}`;
+/** Identity: return the launch command unchanged. Confinement is dropped (ADR-0017). */
+export function confine(launch: string, _workspace: string): string {
+  return launch;
 }

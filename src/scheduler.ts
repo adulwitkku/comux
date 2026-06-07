@@ -65,6 +65,10 @@ export async function runWithChain(opts: ChainRunOpts): Promise<ChainOutcome> {
       launchCommand: agent.buildCommand(opts.prompt, opts.workspace),
       watchdogMs: opts.watchdogMs,
       closeOnEnd: false,
+      // ADR-0015: detect a finished interactive turn via cmux lifecycle (idle), not just the
+      // exit sentinel. headless Agents (pi/agy) still resolve via the sentinel below.
+      lifecycleAgent: agent.hookName,
+      workspace: opts.workspace,
     });
 
     if (r.outcome === "stuck") {
@@ -73,12 +77,14 @@ export async function runWithChain(opts: ChainRunOpts): Promise<ChainOutcome> {
       opts.say(ui.warn(`${name} went silent (watchdog) — trying next in chain`));
       continue;
     }
-    if (r.exitCode !== 0) {
+    if (r.outcome === "completed" && r.exitCode !== 0) {
       attempts.push({ agent: name, result: "exit", exitCode: r.exitCode });
       opts.down.add(name);
       opts.say(ui.warn(`${name} exited ${r.exitCode} — trying next in chain`));
       continue;
     }
+    // r.outcome is "completed" with exit 0, or "idle" (interactive turn finished) — a success
+    // candidate. The frozen Acceptance check, not the exit/lifecycle, decides "done" (ADR-0009).
 
     if (opts.check) {
       const c = await runCheck(opts.check, opts.workspace);

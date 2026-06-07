@@ -118,3 +118,38 @@ export function stepPrompt(step: Step): string {
     "Do not start other steps and do not edit PLAN.md. Stop once the check would pass.",
   ].join("\n");
 }
+
+/** The markdown file every dispatch writes its answer/summary to; the Harness opens it (ADR-0018). */
+export const REPORT_FILE = "REPORT.md";
+
+/**
+ * Appended to every implementation/single dispatch so the Agent's answer lands as a markdown
+ * artifact the Harness opens in cmux's viewer (ADR-0018) — the TUI renders tables/images/graphs
+ * poorly, so the readable answer always lives in markdown.
+ */
+export function outputInstruction(): string {
+  return [
+    "",
+    `When you are done, write a concise summary of what you did and any results to \`${REPORT_FILE}\``,
+    "in the working directory, as GitHub-flavored Markdown (use headings, tables, links, and image",
+    "references where they help). This file is what the user reads, so make it self-contained.",
+  ].join("\n");
+}
+
+/**
+ * Appended to dispatches that may benefit from a real browser (ADR-0018): the Agent can test a web
+ * app it built or gather information by driving cmux's browser. Only skill/CLI-capable Agents will
+ * act on it; it is harmless otherwise.
+ */
+export function browserHint(): string {
+  return [
+    "",
+    "If you need to view or test a web page (e.g. a web app you just built, or to gather",
+    "information), you can drive a real browser via the cmux CLI:",
+    "  cmux browser open <url>            # opens a browser surface, prints its surface ref",
+    "  cmux browser <surface> wait --load-state complete",
+    "  cmux browser <surface> snapshot --interactive   # element refs to act on",
+    "  cmux browser <surface> click <ref> | fill <ref> <text> | get url",
+    "Re-snapshot after navigation or DOM changes.",
+  ].join("\n");
+}

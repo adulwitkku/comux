@@ -1,5 +1,8 @@
 # The task spec is minimal and names the work, not the Agent
 
+> **Status:** amended by ADR-0018 — the `reply` branch is removed; the spec is now
+> `{task, capability}` and every message dispatches. "Names the work, not the Agent" still stands.
+
 The Orchestrator's output is a deliberately minimal two-field JSON object —
 `{reply, task}` with exactly one field set — in the spirit of pi.dev's "primitives, not
 features". `reply` means the Orchestrator answers the user directly; `task` is a

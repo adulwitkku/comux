@@ -29,10 +29,11 @@ pane (ADR-0001) — not a headless `-p` invocation.
 _Avoid_: Worker, CLI
 
 **Task spec**:
-The minimal structured output of the Orchestrator: one JSON object `{reply, task, capability}`
-where `reply` and `task` are mutually exclusive — `reply` (the Orchestrator answers the user
-directly) or `task` (a natural-language instruction to dispatch, tagged with a Capability). It
-names WHAT to do, never WHO does it — config + the Scheduler pick the Agent. Dispatched `task`
+The minimal structured output of the Orchestrator: one JSON object `{task, capability}`. There
+is no direct-reply branch — **every** user message becomes a dispatched `task` (a natural-language
+instruction tagged with a Capability), even a greeting; the Orchestrator only classifies, it never
+answers the user itself. The answer always comes back as an Agent-authored markdown artifact the
+Harness opens (see Capability). It names WHAT to do, never WHO does it — config + the Scheduler pick the Agent. Dispatched `task`
 strings are always in **English** — a clear instruction rephrased from the user's intent, not a
 literal word-for-word translation — even when the user wrote in another language. For `web_search`,
 when a `topic` is present the `task` also names the optional Thai artifact (`search_<topic>.md`). The only artifact the Orchestrator is responsible
@@ -41,15 +42,25 @@ for producing. A dispatched `web_search` or `image` task may optionally carry a 
 `search_<topic>.md` or `image_<topic>.md` respectively.
 
 **Capability**:
-The kind of work a dispatched task is — `web_search`, `image`, or `coding` (a chat reply has
-none). The Orchestrator classifies the message into a Capability; deterministic config maps each
-Capability to its own Agent chain. It is a classification of the work, never an Agent name
+The kind of work a dispatched task is — `web_search`, `image`, `coding`, or `chat`. Every message
+is classified into a Capability (there is no longer a no-Capability chat reply — see Task spec); the
+Orchestrator classifies, and deterministic config maps each Capability to its own Agent chain. The
+`chat` Capability (greetings, small talk, direct questions) is handled by the **local Orchestrator
+model itself** writing a short markdown reply — no cloud Agent is spun up for "hi" — while the other
+Capabilities dispatch to Agent chains. When the classifier is **not confident** which Capability a
+message is, the choice is surfaced as a Grilling decision (its recommended option is the model's top
+guess) rather than silently defaulting to `coding`.
+Whatever the Capability, the Agent's answer is written to a markdown artifact and the Harness opens
+it in cmux's markdown viewer when the Agent goes idle — markdown is the universal answer surface,
+no longer an optional extra. Driving a real browser (to test a built web app or gather data) is a
+**tool an Agent may use mid-run**, not its own Capability. It is a classification of the work, never an Agent name
 (ADR-0011). `web_search` and `image` are **single dispatches** (not PLAN-walks): the user watches
 the Agent work in its visible pane; an optional Thai markdown summary in the workspace may be
 written as a readable artifact (opened via cmux when present), but absence of that file is not a
 failure. The same optional-artifact rules apply to both `web_search` and `image`.
-Single dispatches run without a human confirm gate. A coding job uses a separate **plan
-approval** step (approve the PLAN.md once, then walk Steps autonomously).
+Single dispatches run without a human confirm gate. A coding job's plan approval is one of
+the Agent's **Grilling** decisions (the "plan is ready" decision), answered by **Bypass mode**
+by default rather than a guaranteed human gate.
 
 **Handover**:
 The transfer of an in-progress job from a failed/exhausted Agent to the next Agent in
@@ -110,4 +121,23 @@ advisory/compare playground, not autonomous orchestration; collisions between Ag
 same files are the human's responsibility.
 _Avoid_: Dispatch (a Dispatch is a single routed task through a chain; a Broadcast is the
 opposite — unrouted, to everyone at once)
+
+**Grilling**:
+The interaction model in which a running Agent surfaces its decisions as it works — a
+permission request, a "plan is ready" decision, or a multiple-choice question — instead of
+running silently after a single up-front approval. Each surfaced decision is answered either
+by the Harness (Bypass mode) or by the human. Grilling generalises the older "approve the
+plan once, then autonomous" gate into a continuous stream of answerable decisions; the Agent's
+write-confinement to its repo is unchanged and remains the hard safety boundary. Grilling only
+resolves *choices* — what "done" means is still the frozen Acceptance check, never the Agent's
+say-so.
+_Avoid_: Chat (Grilling is structured decisions with options, not free-form conversation);
+Plan approval (that is now just one Grilling decision, not a special gate)
+
+**Bypass mode**:
+A Harness setting, **default ON**, that auto-answers every Grilling decision so a job runs
+end-to-end with zero human gates — a permission request is allowed, a "plan is ready" decision
+proceeds, and a question takes its recommended option. With Bypass mode OFF the Harness still
+auto-answers any decision that carries a recommended option, and escalates **only** a decision
+with no recommendation to the human.
 

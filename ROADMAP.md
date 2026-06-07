@@ -160,6 +160,59 @@ If a file-explorer / image-rendering view is still wanted, build a Bun web app a
 as a cmux browser surface (`cmux browser open http://localhost:<port>`). Port is
 configurable, not hardcoded.
 
+## Design review round 2 — "it doesn't feel smart" (ADR-0015–0019)
+
+A run-it-for-real review found the felt dumbness was **not** wrong `cmux` calls (`src/cmux.ts`
+matches cmux CLI v0.64.14 exactly). The real causes were three, tackled as phases ordered by
+impact. All three are designed; none are implemented yet.
+
+### P1 — Completion detection via cmux lifecycle, not sentinel/screen-diff (ADR-0015)
+The exit sentinel + `read-screen` silence watchdog only works for Agents that *exit*; an
+interactive TUI (ADR-0012) never exits when it finishes a turn, so a healthy Agent reads as
+"stuck" and is handed over — the main "can't tell when a job is done" symptom. Switch to cmux's
+own agent lifecycle (`running` / `idle` / `needsInput`, surfaced via `cmux hooks` + the
+`cmux events` Feed stream): `idle` ⇒ run the frozen Acceptance check (still the done-authority,
+ADR-0009); `needsInput` ⇒ a Grilling decision (P-interaction); crash/exit ⇒ sentinel fallback.
+`/setup` must now also run `cmux hooks setup` for installed Agents → **`cmux hooks` becomes a
+runtime requirement**. Supersedes the detection half of ADR-0007.
+
+### P-interaction — Continuous grilling + Bypass mode; unconfined Agents (ADR-0016, ADR-0017)
+Replace ADR-0005's single "approve once" gate with **Grilling**: the Agent surfaces decisions as
+it works (permission / plan-is-ready / multiple-choice question) via the cmux Feed, each answered
+by the Harness or the human. **Bypass mode (default ON)** auto-answers everything (zero gates);
+Bypass OFF auto-picks any recommended option and escalates only the no-recommendation case to the
+human. With the gate gone and Agents driving cmux, the write-only sandbox was guarding a side door
+— so **confinement is dropped** (ADR-0017): Agents run unconfined like Broadcast. The remaining
+guards are the frozen Acceptance check (ADR-0009) and Git checkpoints (ADR-0002), which matter more
+now, not less.
+
+### P3 — Universal markdown output + browser as a mid-run tool (ADR-0018)
+Every message dispatches and the Agent's answer is a **markdown artifact** the Harness opens in
+cmux's viewer (TUI renders images/tables/graphs badly). The Orchestrator's direct-reply branch is
+removed; it becomes a pure classifier (Task spec → `{task, capability}`). Of the three requested
+skills, only **cmux-browser** is given to Agents (a tool to test built web apps / gather data);
+**cmux-markdown** is moot (Agent writes a file, Harness opens it, keeping cmux on the Harness side
+per ADR-0007) and **cmux-core** topology is moot (Harness lays out panes). Browser is a tool, not
+a Capability, so the Orchestrator stays thin (ADR-0006).
+
+### P2 — Classifier uncertainty grills; a `chat` Capability (ADR-0019)
+The 12B local classifier misroutes, and `normalise()` silently defaults the unknown case to
+`coding` — the "picks the wrong type" symptom. Fix: emit `confident` + ranked `alternatives`
+(defensive parse, ADR-0008); when not confident, surface the capability choice as a Grilling
+decision (recommended = the model's top guess) instead of defaulting. Add a fourth Capability
+`chat` (greetings / small talk) handled by the **local model itself** writing a short markdown
+reply — no cloud Agent spun up for "hi".
+
+### Parked (discovered during the review)
+- **Session resume for Handover/M5.** cmux stores each Agent's `sessionId` + native resume command
+  (`claude --resume <id>`, `codex resume <id>`, …) in `~/.cmuxterm/<agent>-hook-sessions.json`.
+  Resuming the *same* Agent's session is a cheaper alternative to the cold-from-git restart M5
+  assumes — worth evaluating when productionising Handover.
+- **Agent Hibernation gotcha.** cmux can SIGTERM idle off-screen Agent panes (default off, only
+  >12 live Agents). comux opens many panes; note this if enabling hibernation.
+- **Open P3 impl details.** The markdown output filename/location convention; how skill-capable
+  Agents are given cmux-browser and the chain implications.
+
 ## Resolved details
 
 - **Task spec schema** — minimal `{reply, task}`, exactly one field set; names the work,
@@ -178,13 +231,13 @@ configurable, not hardcoded.
 Tracked gaps where the docs/ADRs once described a settled state that the code has not yet
 reached. Ordered by impact:
 
-1. **Approve-once vs per-step confirm.** ADR-0005 decides "approve the plan once, then run
-   autonomously", but M3 ships a per-dispatch confirm. Land approve-once together with the
-   M4 autonomous PLAN-walk; until then ADR-0005 carries a status note.
-2. **Workspace confinement is enforced on macOS only.** `src/sandbox.ts` wraps each Agent
-   in `sandbox-exec` so it can only write inside the workspace (ADR-0005). On Linux/Windows
-   there is no enforcement yet — add a per-platform sandbox (e.g. bubblewrap/landlock) before
-   claiming the boundary cross-platform. Opt out with `COMUX_NO_SANDBOX=1`.
+1. **Approve-once is superseded.** ADR-0016 replaces the single approve-once gate with Continuous
+   grilling + Bypass mode (default ON = zero gates). The M3 per-dispatch confirm is now legacy; the
+   gate work is the P-interaction phase above, not a return to approve-once.
+2. **Workspace confinement is dropped, not cross-platform'd.** ADR-0017 removes the `sandbox-exec`
+   write-confinement for the orchestrated flow (Agents run unconfined). The old cross-platform
+   sandbox task is therefore moot; the safety story is trusted Agents + frozen Acceptance check +
+   Git checkpoints. (`COMUX_NO_SANDBOX` and `src/sandbox.ts` become vestigial.)
 3. **`gemma4:12b-mlx` is the one canonical model tag** (was inconsistently `gemma4:12b`).
    Verify the tag exists in Ollama and that the `256k` context shown in the status bar matches
    the model actually pulled.
@@ -195,8 +248,9 @@ reached. Ordered by impact:
 
 - ~~How to force the model to emit valid JSON.~~ Resolved: the MLX runtime ignores `format`,
   so we parse defensively + normalise rather than trusting structured output (ADR-0008).
-- The watchdog's `N` (silence threshold) and how to distinguish "thinking" from "stuck"
-  (deferred; `read-screen` diffing is also sensitive to animated prompts — see ADR-0007).
+- ~~The watchdog's `N` (silence threshold) and how to distinguish "thinking" from "stuck".~~
+  Re-resolved by ADR-0015: completion comes from cmux's agent lifecycle (`idle`/`needsInput`),
+  not `read-screen` diffing; the silence watchdog drops to a backstop for a truly hung Agent.
 
 ## Stack
 

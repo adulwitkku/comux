@@ -1,5 +1,9 @@
 # The Harness drives Agents through the cmux CLI, not node-pty
 
+> **Status:** the *completion-detection* mechanism below (exit sentinel + `read-screen` silence
+> watchdog) is superseded by ADR-0015 (detection via cmux agent lifecycle); the sentinel survives
+> only as a fallback. Driving Agents through the cmux CLI (the rest of this ADR) still stands.
+
 The original PRD (and ADR-0001) anticipated a PTY library (`node-pty`) to launch Agents and
 read their streams. In practice the running cmux already exposes every primitive M1 needs,
 so the Harness shells out to the `cmux` CLI and takes **no** dependency on node-pty:

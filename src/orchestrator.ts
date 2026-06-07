@@ -1,29 +1,33 @@
-// The Orchestrator: turn natural-language input into a minimal task spec (ADR-0006).
-// It is a thin intent-parser, NOT a planner (ADR-0003): it decides only "reply vs
-// dispatch" and the one-line instruction — never which Agent runs it (that is the
-// Scheduler's job, ADR-0004).
+// The Orchestrator: classify a natural-language message into a Capability (ADR-0006, ADR-0018).
+// It is a thin classifier, NOT a planner (ADR-0003), and NOT a replier: every message is
+// dispatched (ADR-0018), so there is no "reply vs task" branch any more — only "which Capability".
 //
-// Stateless per turn (ADR-0003): each call is `system prompt (role + PLAN.md + recent git
-// log) + the new user message`. No chat history is accumulated.
+// Stateless per turn (ADR-0003): each call is `system prompt (role + PLAN.md + recent git log) +
+// the new user message`. No chat history is accumulated.
 
 import { chat, extractJson, type ChatMessage } from "./llm.ts";
 import type { Capability } from "./config.ts";
 
-/** Exactly one of `reply` / `task` is non-null after normalisation. */
 export interface TaskSpec {
-  /** Text answer shown to the user (Orchestrator handles it itself). */
-  reply: string | null;
-  /** One-line natural-language instruction to dispatch to an Agent. */
-  task: string | null;
-  /** The kind of work — picks which chain runs (non-null iff `task` is). Names WHAT, not WHO. */
-  capability: Capability | null;
-  /** Optional ASCII slug for optional markdown artifacts on web_search / image (ADR-0013). */
+  /** One-line natural-language instruction to dispatch (ADR-0018: always present). */
+  task: string;
+  /** The kind of work — picks which chain runs. Names WHAT, not WHO (ADR-0006). */
+  capability: Capability;
+  /** Optional ASCII slug for the markdown artifact on web_search / image. */
   topic: string | null;
+  /** ADR-0019: false → the Harness grills the capability choice instead of trusting it. */
+  confident: boolean;
+  /** ADR-0019: other plausible Capabilities, ranked — the options offered when not confident. */
+  alternatives: Capability[];
   /** Optional reasoning, for logging only. */
   thought?: string | null;
 }
 
-const CAPABILITIES: Capability[] = ["web_search", "image", "coding"];
+const CAPABILITIES: Capability[] = ["web_search", "image", "coding", "chat"];
+
+function isCapability(x: unknown): x is Capability {
+  return typeof x === "string" && (CAPABILITIES as string[]).includes(x);
+}
 
 export interface IntentContext {
   /** Current PLAN.md contents (the Orchestrator's only memory). */
@@ -35,18 +39,29 @@ export interface IntentContext {
 }
 
 // Best-effort hint to Ollama. The MLX backend does not strictly enforce it, so the
-// real guarantee comes from defensive parsing + normalisation below.
+// real guarantee comes from defensive parsing + normalisation below (ADR-0008).
 const TASK_SPEC_SCHEMA = {
   type: "object",
   properties: {
     thought: { type: "string" },
-    reply: { type: ["string", "null"] },
-    task: { type: ["string", "null"] },
-    capability: { type: ["string", "null"], enum: ["web_search", "image", "coding", null] },
+    task: { type: "string" },
+    capability: { type: "string", enum: ["web_search", "image", "coding", "chat"] },
     topic: { type: ["string", "null"] },
+    confident: { type: "boolean" },
+    alternatives: { type: "array", items: { type: "string" } },
   },
-  required: ["reply", "task"],
+  required: ["task", "capability"],
 } as const;
+
+/** The raw shape we tolerate from the model before normalisation. */
+interface RawSpec {
+  task?: unknown;
+  capability?: unknown;
+  topic?: unknown;
+  confident?: unknown;
+  alternatives?: unknown;
+  thought?: unknown;
+}
 
 /** Normalise a topic slug to a safe filename segment. */
 export function slugTopic(raw: string): string {
@@ -59,7 +74,7 @@ export function slugTopic(raw: string): string {
     .replace(/^_|_$/g, "");
 }
 
-/** Optional artifact path when a single-dispatch capability carries a topic (ADR-0013). */
+/** Optional artifact path when a single-dispatch capability carries a topic. */
 export function artifactFilename(capability: "web_search" | "image", topic: string): string {
   const prefix = capability === "web_search" ? "search" : "image";
   return `${prefix}_${topic}.md`;
@@ -107,22 +122,36 @@ export function resolveTopic(spec: TaskSpec, userInput?: string): string | null 
 export function buildSystemPrompt(ctx: IntentContext): string {
   return [
     "You are the Orchestrator of an agent harness. You do NOT write code, search, or plan work.",
-    "You only classify the user's message and reply with a single JSON object:",
-    '  - { "reply": "<text>", "task": null, "capability": null, "topic": null }   answer directly or just chatting',
-    '  - { "reply": null, "task": "<English instruction>", "capability": "<kind>", "topic": "<slug or null>" }   hand work to an agent',
+    "You only CLASSIFY the user's message into a kind of work and reply with a single JSON object:",
+    '  { "thought": "<why>", "task": "<English instruction>", "capability": "<kind>",',
+    '    "topic": "<slug or null>", "confident": <true|false>, "alternatives": ["<kind>", ...] }',
     "where <kind> is exactly one of:",
-    '    "coding"      — write or modify code/files, build or fix something',
-    '    "web_search"  — look something up on the web or fetch current information',
+    '    "chat"        — the DEFAULT for anything that just wants an answer: greetings, small',
+    "                    talk, status questions about this project, explanations, or opinions.",
+    "                    Anything that does NOT change files, search the web, or make an image.",
+    '    "coding"      — write or modify code/files, build, fix, refactor, or run something',
+    '    "web_search"  — look something up on the web or fetch current/external information',
     '    "image"       — generate or edit an image',
+    "Examples (message -> capability):",
+    '    "สวัสดี" -> chat   ·   "ตอนนี้โปรเจกต์ทำถึงไหนแล้ว" -> chat   ·   "ควรใช้ Postgres ไหม" -> chat',
+    '    "เพิ่มปุ่ม dark mode ในหน้า settings" -> coding   ·   "fix the login bug" -> coding',
+    '    "ค้นหาราคา iphone ล่าสุด" -> web_search   ·   "วาดโลโก้รูปแมว" -> image',
     "Rules:",
-    "- Exactly one of reply/task is non-null; capability is non-null iff task is.",
-    "- Dispatched task strings are always in English: a clear instruction rephrased from the",
-    "  user's intent, not a literal word-for-word translation.",
+    "- ALWAYS set task and capability (every message is dispatched; there is no direct reply).",
+    "- coding requires an explicit request to CREATE or CHANGE something (add, build, fix, write,",
+    "  refactor, delete, run). A QUESTION is never coding. Asking 'how far is the project', 'what's",
+    "  done', 'what does X do', or 'should we use Y' is a STATUS/opinion question -> chat, even when",
+    "  it mentions code or the project. Mentioning the project does NOT make it coding.",
+    "- If in doubt between chat and something else, prefer chat unless the user clearly asks to",
+    "  build/modify code, search the web, or make an image.",
+    "- task is a clear English instruction rephrased from the user's intent, NOT a literal",
+    "  word-for-word translation. For chat, task restates what the user wants answered.",
     "- Never name which agent runs it (that is chosen by config).",
+    "- confident: set true when the kind is clear (most messages). Only set confident=false when",
+    "  the message could genuinely be two different kinds — then list them, best first, in",
+    "  alternatives (e.g. [\"coding\",\"chat\"]).",
     '- Optional "topic": a short ASCII slug (e.g. "neighborsoft") for web_search or image when',
-    "  a readable summary file would help. When topic is set, the English task must ask the agent",
-    "  to optionally save a Thai markdown summary as search_<topic>.md (web_search) or",
-    "  image_<topic>.md (image). Omit topic (null) when no summary file is needed.",
+    "  a readable summary file would help; otherwise null.",
     "- Output JSON only.",
     "",
     "Current PLAN.md (the source of truth for what is being built and what remains):",
@@ -133,34 +162,37 @@ export function buildSystemPrompt(ctx: IntentContext): string {
   ].join("\n");
 }
 
-function normalise(raw: TaskSpec): TaskSpec {
-  const task = typeof raw.task === "string" && raw.task.trim() ? raw.task.trim() : null;
-  const reply = typeof raw.reply === "string" && raw.reply.trim() ? raw.reply.trim() : null;
-  const thought = raw.thought ?? null;
+function normalise(raw: RawSpec, userInput: string): TaskSpec {
+  const task = typeof raw.task === "string" && raw.task.trim() ? raw.task.trim() : userInput.trim();
+  const thought = typeof raw.thought === "string" ? raw.thought : null;
   const topicRaw = typeof raw.topic === "string" && raw.topic.trim() ? raw.topic.trim() : null;
   const topic = topicRaw ? slugTopic(topicRaw) || null : null;
 
-  // Enforce "exactly one": a concrete task wins; otherwise fall back to reply.
-  if (task) {
-    // Default an unknown/missing capability to coding — the most common dispatched work.
-    const capability = CAPABILITIES.includes(raw.capability as Capability)
-      ? (raw.capability as Capability)
-      : "coding";
-    let cappedTopic =
-      capability === "web_search" || capability === "image" ? topic : null;
-    if (!cappedTopic && (capability === "web_search" || capability === "image")) {
-      cappedTopic = topicFromTask(task, capability);
-    }
-    return { reply: null, task, capability, topic: cappedTopic, thought };
+  const alternatives = Array.isArray(raw.alternatives)
+    ? (raw.alternatives.filter(isCapability) as Capability[])
+    : [];
+
+  // ADR-0019: no silent default-to-coding. If the model named a valid capability we use it; if it
+  // did not, we DON'T silently route — we mark it not-confident and offer a best guess (the first
+  // valid alternative, else coding) for the Harness to grill.
+  let capability: Capability;
+  let confident: boolean;
+  if (isCapability(raw.capability)) {
+    capability = raw.capability;
+    confident = raw.confident !== false; // default to confident unless the model says otherwise
+  } else {
+    capability = alternatives[0] ?? "coding";
+    confident = false;
   }
-  if (reply) return { reply, task: null, capability: null, topic: null, thought };
-  return {
-    reply: "ขอโทษครับ ผมไม่แน่ใจว่าต้องทำอะไร ช่วยบอกใหม่อีกครั้งได้ไหม",
-    task: null,
-    capability: null,
-    topic: null,
-    thought,
-  };
+
+  // The chosen capability should not also appear in its own alternatives list.
+  const alts = alternatives.filter((c) => c !== capability);
+  let cappedTopic = capability === "web_search" || capability === "image" ? topic : null;
+  if (!cappedTopic && (capability === "web_search" || capability === "image")) {
+    cappedTopic = topicFromTask(task, capability);
+  }
+
+  return { task, capability, topic: cappedTopic, confident, alternatives: alts, thought };
 }
 
 export async function parseIntent(userInput: string, ctx: IntentContext): Promise<TaskSpec> {
@@ -168,11 +200,36 @@ export async function parseIntent(userInput: string, ctx: IntentContext): Promis
     { role: "system", content: buildSystemPrompt(ctx) },
     { role: "user", content: userInput },
   ];
-  const content = await chat(messages, {
-    model: ctx.model,
-    baseUrl: ctx.baseUrl,
-    format: TASK_SPEC_SCHEMA,
-    think: false,
-  });
-  return normalise(extractJson<TaskSpec>(content));
+  // NB: we deliberately do NOT pass the JSON `format` schema here. The MLX backend's constrained
+  // decoding makes gemma4:12b-mlx emit degenerate specs (everything -> coding, task = the raw input
+  // un-rephrased); free-form generation + defensive parse (ADR-0008) classifies far better.
+  const content = await chat(messages, { model: ctx.model, baseUrl: ctx.baseUrl, think: false });
+  return normalise(extractJson<RawSpec>(content), userInput);
+}
+
+/**
+ * Handle the `chat` Capability (ADR-0019): the local Orchestrator model itself authors a short
+ * markdown reply — no cloud Agent is spun up for "hi". Returns the markdown the Harness writes to
+ * the workspace and opens in cmux's viewer.
+ */
+export async function chatReply(userInput: string, ctx: IntentContext): Promise<string> {
+  const messages: ChatMessage[] = [
+    {
+      role: "system",
+      content: [
+        "You are the assistant of a local coding harness. Answer the user directly and concisely",
+        "as GitHub-flavored Markdown (use headings, lists, tables, code blocks where they help).",
+        "Reply in the user's language. Do not invent file changes — this is just conversation.",
+        "",
+        "Current PLAN.md:",
+        ctx.planMd.trim() || "(empty)",
+        "",
+        "Recent commits:",
+        ctx.gitLog.trim() || "(none)",
+      ].join("\n"),
+    },
+    { role: "user", content: userInput },
+  ];
+  const content = await chat(messages, { model: ctx.model, baseUrl: ctx.baseUrl, think: false });
+  return content.trim() || "(no reply)";
 }

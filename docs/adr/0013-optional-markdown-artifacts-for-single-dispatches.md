@@ -1,5 +1,9 @@
 # Optional Thai markdown artifacts for `web_search` and `image` single dispatches
 
+> **Status:** superseded by ADR-0018 — markdown output is no longer optional or single-dispatch-only;
+> every dispatch produces a markdown artifact the Harness opens. The artifact-naming detail here is
+> still a useful reference.
+
 `web_search` and `image` are **single dispatches** down their Capability chains (ADR-0011).
 The user watches the Agent in its pane; that visible work is the primary experience. Either
 dispatch may **also** leave an optional **Thai markdown summary** in the workspace as a

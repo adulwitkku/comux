@@ -18,11 +18,19 @@ import { runBroadcast, parseBroadcastArgs } from "../src/broadcast.ts";
 import { runUpdate } from "../src/update.ts";
 import { ensureWorkspace, readPlan, currentBranch, listFiles } from "../src/workspace.ts";
 import { runTurn } from "../src/harness.ts";
+import { startFeedWatcher } from "../src/feed.ts";
 import { Tui, type Item } from "../src/tui.ts";
 import { lastStats } from "../src/llm.ts";
 import { VERSION } from "../src/version.ts";
 import { c } from "../src/ui.ts";
-import { loadConfig, configExists, configPath, type Config, type ChainKey } from "../src/config.ts";
+import {
+  loadConfig,
+  configExists,
+  configPath,
+  type Config,
+  type ChainKey,
+  type Capability,
+} from "../src/config.ts";
 import { runSetup, detectAgents, type SetupResult } from "../src/setup.ts";
 
 const args = process.argv.slice(2);
@@ -47,10 +55,11 @@ if (args.includes("--help") || args.includes("-h")) {
       "  COMUX_WORKSPACE   default workspace directory",
       "  COMUX_MODEL       Ollama model (default: gemma4:12b-mlx)",
       "  OLLAMA_HOST       Ollama server URL (default: http://localhost:11434)",
-      "  COMUX_YES         auto-approve dispatches (non-interactive)",
-      "  COMUX_NO_SANDBOX  disable the macOS write-confinement sandbox",
+      "  COMUX_YES         auto-approve the plan gate when Bypass mode is off (non-interactive)",
       "",
-      "Needs a running cmux, Ollama serving the model, and an Agent CLI (pi) on PATH.",
+      "Needs a running cmux (with `cmux hooks setup` run — see /setup), Ollama serving the model,",
+      "and an Agent CLI on PATH. Bypass mode (default on) auto-answers agent prompts; edit",
+      "~/.config/comux/config.json to turn it off.",
     ].join("\n"),
   );
   process.exit(0);
@@ -140,6 +149,16 @@ const say = (m: string) => tui.print(m);
 const confirmPlan = async (_summary: string) =>
   autoYes ? true : tui.confirm("อนุมัติแผนนี้แล้วรันทั้งหมดเลยไหม?");
 
+// ADR-0019: when the classifier is unsure and Bypass mode is off, let the human pick the kind.
+const chooseCapability = async (top: Capability, alts: Capability[]): Promise<Capability> => {
+  const opts = [top, ...alts.filter((c) => c !== top)];
+  const i = await tui.choose("งานนี้เป็นแบบไหน?", opts);
+  return opts[i] ?? top;
+};
+
+// ADR-0016: answer Agent Grilling decisions (permission / plan / question) on the cmux Feed.
+const feed = startFeedWatcher({ bypass: config.bypass, say });
+
 tui.printHeader();
 say(c.gray("  workspace: ") + c.blue(tilde(workspace)));
 say("");
@@ -147,6 +166,11 @@ say("");
 if (firstSetup) {
   say(c.green("  ✓ first run — wrote default agent chains:"));
   showAgents();
+  say(
+    firstSetup.hooksInstalled
+      ? c.gray("  ✓ installed cmux agent hooks (completion detection)")
+      : c.red("  ⚠ `cmux hooks setup` did not run cleanly — completion falls back to the exit sentinel"),
+  );
   say(c.gray("  edit that file to customise the order, or /setup to reset · /agents to view."));
   say("");
 }
@@ -174,6 +198,11 @@ loop: for (;;) {
       config = r.config;
       say(c.green("  ✓ wrote default agent chains:"));
       showAgents();
+      say(
+        r.hooksInstalled
+          ? c.gray("  ✓ installed cmux agent hooks (completion detection)")
+          : c.red("  ⚠ `cmux hooks setup` did not run cleanly — completion falls back to the exit sentinel"),
+      );
       continue;
     }
     case "/agents":
@@ -188,10 +217,11 @@ loop: for (;;) {
   }
 
   try {
-    await runTurn(line, { workspace, selfSurface, config, confirmPlan, say });
+    await runTurn(line, { workspace, selfSurface, config, confirmPlan, chooseCapability, say });
   } catch (e) {
     say(c.red(`  ⚠ error: ${(e as Error).message}`));
   }
 }
 
+feed.stop();
 console.log(c.gray("bye."));

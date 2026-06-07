@@ -1,5 +1,9 @@
 # The local Orchestrator is an optional front-door classifier, not the core
 
+> **Status:** sharpened by ADR-0018 — the "chat vs job" branch is gone; the Orchestrator is now a
+> pure capability classifier (every message dispatches). The "optional, not the core" thesis holds
+> more strongly than before.
+
 The conductor of a job is **deterministic local code** (the Harness loop that walks PLAN.md,
 runs each Step's Acceptance check, and checkpoints) — not the local LLM. Once the autonomous
 PLAN-walk exists, the Orchestrator's only remaining job is a front-door classification of the

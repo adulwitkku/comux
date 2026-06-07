@@ -1,24 +1,45 @@
-// One turn of the harness: parse the user's message into a Capability, then route it.
+// One turn of the harness: classify the user's message into a Capability, then dispatch it.
+// Every message dispatches and its answer comes back as a markdown artifact the Harness opens
+// (ADR-0018) — there is no direct chat reply.
 //
-//   chat        → show a REPLY (the Orchestrator answered it).
-//   web_search  → a single dispatch down the web_search chain (auto-run, no confirm).
-//   image       → a single dispatch down the image chain (auto-run, no confirm).
-//   coding      → the autonomous PLAN-walk: a plan dispatch (planning chain) authors PLAN.md,
-//                 the human approves it once (ADR-0005), then each Step is implemented down the
-//                 coding chain and gated on its frozen Acceptance check (ADR-0009).
+//   chat        → the local Orchestrator model writes a markdown reply (no Agent spun up, ADR-0019).
+//   web_search  → a single dispatch down the web_search chain (auto-run).
+//   image       → a single dispatch down the image chain (auto-run).
+//   coding      → the autonomous PLAN-walk: a plan dispatch (planning chain) authors PLAN.md, the
+//                 plan-is-ready decision is answered by Bypass mode (or the human when bypass is
+//                 off, ADR-0016), then each Step is implemented down the coding chain and gated on
+//                 its frozen Acceptance check (ADR-0009).
 //
-// Every dispatch runs through the Scheduler (`runWithChain`): the most-preferred Agent that is
-// still available runs; if it crashes or goes silent it is marked down and the next Agent in the
-// chain takes over (ADR-0004). Timed Cooldown / quota-vs-error detection is the open M4 fork.
+// When the classifier is not confident which Capability a message is, the choice is grilled
+// (ADR-0019): Bypass mode takes the model's top guess; otherwise the human picks. Every dispatch
+// runs through the Scheduler (`runWithChain`): the most-preferred Agent runs; if it crashes or goes
+// silent it is marked down and the next Agent takes over (ADR-0004); completion is read from cmux's
+// agent lifecycle (ADR-0015).
 
 import { existsSync, readdirSync, statSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { parseIntent, artifactFilename, resolveTopic, type TaskSpec } from "./orchestrator.ts";
+import {
+  parseIntent,
+  chatReply,
+  artifactFilename,
+  resolveTopic,
+  type TaskSpec,
+} from "./orchestrator.ts";
 import { DEFAULT_WATCHDOG_MS } from "./agent-runner.ts";
 import { runWithChain } from "./scheduler.ts";
 import { checkpoint, hasChanges } from "./git.ts";
 import { readPlan, recentGitLog } from "./workspace.ts";
-import { readSteps, tickStep, planPrompt, stepPrompt, type Step } from "./plan.ts";
+import {
+  readSteps,
+  tickStep,
+  planPrompt,
+  stepPrompt,
+  outputInstruction,
+  browserHint,
+  REPORT_FILE,
+  type Step,
+} from "./plan.ts";
 import { setStatus, log, openMarkdown, type SurfaceRef } from "./cmux.ts";
 import { ui, c } from "./ui.ts";
 import type { Config, Capability } from "./config.ts";
@@ -26,10 +47,12 @@ import type { Config, Capability } from "./config.ts";
 export interface TurnDeps {
   workspace: string;
   selfSurface: SurfaceRef;
-  /** Per-capability Agent chains. */
+  /** Per-capability Agent chains + Bypass mode (ADR-0016). */
   config: Config;
-  /** Human gate: approve a coding PLAN.md once before the autonomous walk (ADR-0005). */
+  /** Human gate for the plan-is-ready decision when Bypass mode is OFF (ADR-0016). */
   confirmPlan: (summary: string) => Promise<boolean>;
+  /** Resolve an uncertain capability when Bypass mode is OFF (ADR-0019). */
+  chooseCapability?: (top: Capability, alternatives: Capability[]) => Promise<Capability>;
   /** Emit a line to the user. */
   say: (msg: string) => void;
   watchdogMs?: number;
@@ -42,20 +65,40 @@ export async function runTurn(input: string, deps: TurnDeps): Promise<void> {
   await setStatus("harness", "thinking");
   const spec = await parseIntent(input, { planMd, gitLog });
 
-  if (spec.task === null) {
-    await setStatus("harness", "idle");
-    deps.say(ui.reply(spec.reply ?? "(no reply)"));
-    return;
+  // ADR-0019: an uncertain classification is grilled, not silently routed. Bypass mode takes the
+  // model's top guess; with bypass off the human picks among the alternatives.
+  let capability = spec.capability;
+  if (!spec.confident) {
+    if (!deps.config.bypass && deps.chooseCapability) {
+      capability = await deps.chooseCapability(spec.capability, spec.alternatives);
+    } else {
+      deps.say(ui.hint(`  (unsure — going with ${capability}; alternatives: ${spec.alternatives.join(", ") || "none"})`));
+    }
   }
 
-  const capability = spec.capability ?? "coding";
   deps.say(ui.dispatch(`${c.gray(`[${capability}]`)} ${spec.task}`));
 
-  if (capability === "coding") {
+  if (capability === "chat") {
+    await chatDispatch(input, { planMd, gitLog }, deps);
+  } else if (capability === "coding") {
     await codingJob(spec.task, deps);
   } else {
     await singleDispatch(capability, spec, input, deps);
   }
+}
+
+/** The `chat` Capability (ADR-0019): the local model writes a markdown reply the Harness opens. */
+async function chatDispatch(
+  input: string,
+  ctx: { planMd: string; gitLog: string },
+  deps: TurnDeps,
+): Promise<void> {
+  await setStatus("harness", "chat");
+  const md = await chatReply(input, ctx);
+  const file = join(deps.workspace, "chat.md");
+  await writeFile(file, md.endsWith("\n") ? md : md + "\n");
+  await setStatus("harness", "idle");
+  await openReport(file, deps);
 }
 
 /** Find an optional markdown artifact on disk (exact topic path, else newest prefix match). */
@@ -78,21 +121,35 @@ function findArtifactPath(
   return newest ?? null;
 }
 
-/** A one-shot capability (web_search / image): auto-run down that capability's chain. */
+/** Open a markdown artifact in cmux's viewer, reporting success/failure to the user. */
+async function openReport(path: string, deps: TurnDeps): Promise<void> {
+  try {
+    await openMarkdown(path, { surface: deps.selfSurface });
+    deps.say(ui.ok(`เปิด ${basename(path)} ใน markdown viewer`));
+  } catch (e) {
+    deps.say(ui.warn(`เปิด ${basename(path)} ใน markdown viewer ไม่ได้: ${(e as Error).message}`));
+  }
+}
+
+/** A one-shot capability (web_search / image): auto-run down that capability's chain (ADR-0018). */
 async function singleDispatch(
   capability: "web_search" | "image",
   spec: TaskSpec,
   userInput: string,
   deps: TurnDeps,
 ): Promise<void> {
-  const goal = spec.task!;
+  const goal = spec.task;
   const chain = deps.config.chains[capability];
   await setStatus("harness", `running ${capability}`);
   await log(`${capability}: ${goal}`);
 
+  // ADR-0018: the answer is always a markdown artifact; web_search may also drive a browser.
+  const prompt =
+    goal + outputInstruction() + (capability === "web_search" ? browserHint() : "");
+
   const outcome = await runWithChain({
     chain,
-    prompt: goal,
+    prompt,
     workspace: deps.workspace,
     fromSurface: deps.selfSurface,
     watchdogMs: deps.watchdogMs ?? DEFAULT_WATCHDOG_MS,
@@ -113,23 +170,23 @@ async function singleDispatch(
   deps.say(ui.ok(`เสร็จแล้ว (${outcome.agent})${hash ? ` — checkpoint ${hash}` : ""}`));
 
   const topic = resolveTopic(spec, userInput);
-  const artifactPath = findArtifactPath(deps.workspace, capability, topic);
-  if (!artifactPath) return;
-
-  try {
-    await openMarkdown(artifactPath, { surface: deps.selfSurface });
-    deps.say(ui.ok(`เปิด ${basename(artifactPath)} ใน markdown viewer`));
-  } catch (e) {
-    deps.say(ui.warn(`พบ ${basename(artifactPath)} แต่เปิด markdown viewer ไม่ได้: ${(e as Error).message}`));
-  }
+  const artifactPath =
+    findArtifactPath(deps.workspace, capability, topic) ?? reportPath(deps.workspace);
+  if (artifactPath) await openReport(artifactPath, deps);
 }
 
-/** A coding job: plan (planning chain) → approve once → walk Steps (coding chain). */
+/** The conventional REPORT.md the Harness opens after a dispatch, if the Agent wrote one. */
+function reportPath(workspace: string): string | null {
+  const p = join(workspace, REPORT_FILE);
+  return existsSync(p) ? p : null;
+}
+
+/** A coding job: plan (planning chain) → answer plan-is-ready → walk Steps (coding chain). */
 async function codingJob(goal: string, deps: TurnDeps): Promise<void> {
   const watchdogMs = deps.watchdogMs ?? DEFAULT_WATCHDOG_MS;
   const down = new Set<string>(); // agents that fall over stay down for the rest of the job
 
-  // 1. Plan dispatch — author PLAN.md down the planning chain (a confined write; nothing built).
+  // 1. Plan dispatch — author PLAN.md down the planning chain (nothing is built yet).
   await setStatus("harness", "planning");
   await log(`plan dispatch: ${goal}`);
   const planned = await runWithChain({
@@ -156,12 +213,13 @@ async function codingJob(goal: string, deps: TurnDeps): Promise<void> {
   }
   await checkpoint(deps.workspace, `plan: ${goal}`);
 
-  // 2. Approve once — gate the whole autonomous walk on a single confirm.
+  // 2. Plan-is-ready decision (ADR-0016): Bypass mode proceeds automatically; otherwise the human
+  // approves the whole autonomous walk once.
   deps.say(ui.banner("  PLAN"));
   steps.forEach((s, i) =>
     deps.say(`  ${c.bold(String(i + 1))}. ${s.description}  ${c.gray(`· check: ${s.check}`)}`),
   );
-  if (!(await deps.confirmPlan(goal))) {
+  if (!deps.config.bypass && !(await deps.confirmPlan(goal))) {
     await setStatus("harness", "idle");
     deps.say(ui.warn("cancelled."));
     return;
@@ -171,7 +229,12 @@ async function codingJob(goal: string, deps: TurnDeps): Promise<void> {
   await walkPlan(steps, deps, down, watchdogMs);
 }
 
-async function walkPlan(steps: Step[], deps: TurnDeps, down: Set<string>, watchdogMs: number): Promise<void> {
+async function walkPlan(
+  steps: Step[],
+  deps: TurnDeps,
+  down: Set<string>,
+  watchdogMs: number,
+): Promise<void> {
   const total = steps.length;
 
   for (const [idx, step] of steps.entries()) {
@@ -185,7 +248,7 @@ async function walkPlan(steps: Step[], deps: TurnDeps, down: Set<string>, watchd
     await log(`step ${n}/${total}: ${step.description}`);
     const outcome = await runWithChain({
       chain: deps.config.chains.coding,
-      prompt: stepPrompt(step),
+      prompt: stepPrompt(step) + outputInstruction() + browserHint(),
       workspace: deps.workspace,
       fromSurface: deps.selfSurface,
       watchdogMs,
@@ -208,4 +271,8 @@ async function walkPlan(steps: Step[], deps: TurnDeps, down: Set<string>, watchd
 
   await setStatus("harness", "idle");
   deps.say(ui.ok(`all ${total} steps done.`));
+
+  // ADR-0018: open the Agent-authored report for the finished job, if there is one.
+  const report = reportPath(deps.workspace);
+  if (report) await openReport(report, deps);
 }

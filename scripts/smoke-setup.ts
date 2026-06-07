@@ -26,9 +26,9 @@ try {
   ok("every agent in DEFAULT_CHAINS exists in the registry", unknown.length === 0, unknown.join(",") || undefined);
   ok("registry and binary map cover the same agents", Object.keys(REGISTRY).sort().join() === Object.keys(AGENT_BINARIES).sort().join());
 
-  // --- the four capability chains are present ---
+  // --- the capability chains are present (incl. chat, ADR-0019) ---
   const keys = Object.keys(DEFAULT_CHAINS).sort().join();
-  ok("chains cover web_search/image/planning/coding", keys === "coding,image,planning,web_search", keys);
+  ok("chains cover chat/web_search/image/planning/coding", keys === "chat,coding,image,planning,web_search", keys);
 
   // --- buildCommand embeds the binary and the (quoted) task ---
   const cmd = pi.buildCommand("make a thing", "/tmp/ws-x");
@@ -40,7 +40,7 @@ try {
 
   // --- config save → load roundtrip in the temp XDG dir ---
   ok("no config before setup", !configExists());
-  const custom = { chains: { ...DEFAULT_CHAINS, coding: ["pi", "claude"] } };
+  const custom = { chains: { ...DEFAULT_CHAINS, coding: ["pi", "claude"] }, bypass: true };
   const path = await saveConfig(custom);
   ok("saveConfig writes under XDG_CONFIG_HOME", path.startsWith(xdg) && configExists(), path);
   const loaded = await loadConfig();
@@ -64,7 +64,13 @@ try {
   ok(
     "resolveTopic falls back to the user message",
     resolveTopic(
-      { reply: null, task: "Search the web for NeighborSoft.", capability: "web_search", topic: null },
+      {
+        task: "Search the web for NeighborSoft.",
+        capability: "web_search",
+        topic: null,
+        confident: true,
+        alternatives: [],
+      },
       "ค้นหาเว็บ neighborsoft",
     ) === "neighborsoft",
   );

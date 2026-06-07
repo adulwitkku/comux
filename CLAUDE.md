@@ -38,53 +38,66 @@ smoke scripts, which require a running cmux + Ollama + the `pi` CLI on PATH.
 
 comux orchestrates other tools and shells out to them at runtime: Bun ≥ 1.3, a running
 **cmux** (it calls the `cmux` CLI — ADR-0007), **Ollama** serving `gemma4:12b-mlx`, and one or
-more **Agent CLIs** on PATH (`pi`, `claude`, `agy`, `codex`, `cursor-agent`, `opencode`) — run
-`/setup` to detect them and write the default per-capability chains to `~/.config/comux/config.json`.
+more **Agent CLIs** on PATH (`pi`, `claude`, `agy`, `codex`, `cursor-agent`/`agent`, `opencode`) — run
+`/setup` to detect them, run `cmux hooks setup` (completion detection — ADR-0015), and write the
+default per-capability chains to `~/.config/comux/config.json`.
 Env: `COMUX_WORKSPACE`, `COMUX_MODEL`, `OLLAMA_HOST`, `XDG_CONFIG_HOME` (config location),
-`COMUX_YES` (auto-approve), `COMUX_NO_SANDBOX` (disable macOS write-confinement).
+`COMUX_YES` (auto-approve the plan gate when Bypass mode is off). Bypass mode (default on,
+ADR-0016) auto-answers agent Grilling prompts; Agents run **unconfined** (ADR-0017).
 
 ## Architecture
 
 The flow per turn (`src/harness.ts:runTurn`): read PLAN.md + recent git log → `parseIntent`
-→ either show a REPLY, or dispatch by **Capability** (ADR-0011). `web_search` / `image` are a
-single dispatch down that Capability's chain; `coding` runs the autonomous **PLAN-walk**: a
-**plan dispatch** (planning chain) asks an Agent to author PLAN.md (Steps, each with a frozen
-Acceptance check) → the human approves the plan **once** → `walkPlan` runs each Step down the
-coding chain in a visible cmux pane, runs its Acceptance check, and `checkpoint`s only when the
-check passes (ADR-0009). Every dispatch goes through the Scheduler (`runWithChain`): the most-
-preferred installed Agent runs and the next in the chain takes over when one falls over.
+classifies the message into a **Capability** (ADR-0011/0018) — **every** message dispatches, there
+is no direct reply. `chat` is answered by the local model writing markdown (ADR-0019); `web_search`
+/ `image` are a single dispatch down that Capability's chain; `coding` runs the autonomous
+**PLAN-walk**: a **plan dispatch** (planning chain) asks an Agent to author PLAN.md (Steps, each
+with a frozen Acceptance check) → the plan-is-ready decision is answered by Bypass mode (or the
+human when bypass is off, ADR-0016) → `walkPlan` runs each Step down the coding chain in a visible
+cmux pane, runs its Acceptance check, and `checkpoint`s only when the check passes (ADR-0009). Every
+dispatch goes through the Scheduler (`runWithChain`): the most-preferred installed Agent runs and the
+next in the chain takes over when one falls over. Completion is read from cmux's agent lifecycle
+(ADR-0015) and the Agent's answer comes back as a markdown artifact the Harness opens (ADR-0018); a
+background **Feed watcher** (`src/feed.ts`) auto-answers agent Grilling prompts under Bypass mode.
 
 - **`src/orchestrator.ts` + `src/llm.ts`** — the Orchestrator. `parseIntent` builds a
   stateless system prompt (role + current PLAN.md + recent git log) and the new user
   message — **no chat history** (ADR-0003). `llm.ts` talks to Ollama over HTTP and extracts
   JSON **defensively**: the MLX backend ignores the `format` hint, so output is parsed and
-  normalised rather than trusted (ADR-0008). The result is a `{reply, task}` spec with
-  exactly one field set; it names WHAT to do, never WHO does it (ADR-0006).
-- **`src/agent-runner.ts`** — `runAgentStep` runs an Agent as its real process in a cmux
-  terminal surface (visible, not headless — ADR-0001). Completion + exit code come from a
-  shell sentinel appended to the launch command (`<cmd>; echo __CMUX_EXIT__=$?`) read back
-  via `read-screen`. A **silence watchdog** (`DEFAULT_WATCHDOG_MS`, 180s) treats a screen
-  that stops changing as stuck — this is NOT a total job timeout; an Agent may run for hours
-  while it keeps producing output. Detection biases toward false-negatives.
+  normalised rather than trusted (ADR-0008). The result is a `{task, capability}` spec plus a
+  `confident` flag + ranked `alternatives` (ADR-0018/0019); it names WHAT to do, never WHO does it
+  (ADR-0006). `chatReply` handles the `chat` Capability with the local model itself.
+- **`src/agent-runner.ts` + `src/lifecycle.ts`** — `runAgentStep` runs an Agent as its real process
+  in a cmux terminal surface (visible, not headless — ADR-0001). Completion is read from cmux's
+  agent **lifecycle** (`idle` ⇒ turn finished; `needsInput` ⇒ blocked, handled by Grilling) via
+  `lifecycle.ts` reading `~/.cmuxterm/<hookName>-hook-sessions.json` (ADR-0015); the exit sentinel
+  (`<cmd>; echo __CMUX_EXIT__=$?`) survives as the fallback for headless Agents and crashes. A
+  **silence watchdog** (`DEFAULT_WATCHDOG_MS`, 180s) is now only a backstop for a truly hung Agent.
+  Detection biases toward false-negatives.
 - **`src/cmux.ts`** — thin wrapper over the `cmux` CLI (split panes, send lines, read
   screen, set status). Every call shape was validated against the real CLI. This is the
   ONLY way agents are driven — no node-pty / keystroke injection (ADR-0007).
 - **`src/agents.ts` + `src/sandbox.ts`** — the Agent registry (`pi`, `claude`, `agy`, `codex`,
-  `cursor`, `opencode`), keyed by the name chains reference. Each Agent turns a task into a shell
-  launch command, wrapped by `confine` so the Agent can only **write** inside its workspace
-  (ADR-0005; enforced via `sandbox-exec` on macOS only, opt out with `COMUX_NO_SANDBOX`). Agents
-  with their own permission prompt are told to skip it — the sandbox is the real boundary.
-- **`src/config.ts` + `src/setup.ts` + `src/scheduler.ts`** — per-Capability Agent chains
-  (ADR-0011). `config.ts` owns the chains and `~/.config/comux/config.json`; `/setup` (`setup.ts`)
-  detects installed CLIs and writes the defaults; `scheduler.ts` (`runWithChain`) walks a chain,
-  marking an Agent down and moving to the next on crash/silence. Timed Cooldown is still M4.
+  `cursor`/`agent`, `opencode`; `cursor` and `agent` are the two symlink names of the same Cursor
+  CLI), keyed by the name chains reference (each also carries a `hookName` for
+  cmux lifecycle, ADR-0015). Each Agent turns a task into a shell launch command. Confinement has
+  been **dropped** (ADR-0017): `confine` in `sandbox.ts` is now an identity function — Agents run
+  unconfined, like Broadcast. The safety story is trusted Agents + the frozen Acceptance check +
+  Git checkpoints.
+- **`src/config.ts` + `src/setup.ts` + `src/scheduler.ts` + `src/feed.ts`** — per-Capability Agent
+  chains (ADR-0011) + Bypass mode (ADR-0016). `config.ts` owns the chains (incl. `chat`), the
+  `bypass` flag, and `~/.config/comux/config.json`; `/setup` (`setup.ts`) detects installed CLIs,
+  runs `cmux hooks setup` (ADR-0015), and writes the defaults; `scheduler.ts` (`runWithChain`) walks
+  a chain, marking an Agent down and moving to the next on crash/silence; `feed.ts` subscribes to
+  cmux's Feed and auto-answers agent decisions under Bypass mode. Timed Cooldown is still M4.
 - **`src/plan.ts` + `src/check.ts`** — PLAN.md is the job: an ordered list of Steps, each a
   checklist item paired with a frozen Acceptance check (ADR-0009). `plan.ts` owns the on-disk
-  format (parse / tick) and the plan/step prompts; `check.ts` runs a Step's check (confined)
-  and a Step is "done" only when it exits 0 — not on exit-0 of the Agent or its self-report.
-- **`src/git.ts` + `src/workspace.ts`** — git is the source of truth for handover (ADR-0002).
-  Agents are confined to their own workspace repo (`./workspace`), approved once then
-  autonomous within that repo (ADR-0005).
+  format (parse / tick), the plan/step prompts, and the markdown-output + browser-tool instructions
+  appended to dispatches (ADR-0018); `check.ts` runs a Step's check and a Step is "done" only when
+  it exits 0 — not on exit-0 of the Agent or its self-report.
+- **`src/git.ts` + `src/workspace.ts`** — git is the source of truth for handover (ADR-0002) and,
+  with confinement dropped (ADR-0017), the primary undo for an unconfined, un-gated run. Agents work
+  in their own workspace repo (`./workspace`).
 - **`scripts/harness.ts` + `src/tui.ts` + `src/ui.ts`** — the CLI entrypoint (`bin: comux`),
   raw-mode TUI (slash commands, `@` file mentions, status bar), and styling helpers.
 

@@ -13,22 +13,34 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 /** A chain is keyed by the kind of work. `planning` is internal to the coding flow. */
-export type ChainKey = "web_search" | "image" | "planning" | "coding";
+export type ChainKey = "web_search" | "image" | "planning" | "coding" | "chat";
 
-/** What the Orchestrator routes a dispatched message to (a chat reply is not a chain). */
-export type Capability = "web_search" | "image" | "coding";
+/** What the Orchestrator routes a dispatched message to (ADR-0018: every message dispatches). */
+export type Capability = "web_search" | "image" | "coding" | "chat";
 
 export interface Config {
   /** Ordered Agent names (most-preferred first) per kind of work. */
   chains: Record<ChainKey, string[]>;
+  /**
+   * Bypass mode (ADR-0016), default ON: auto-answer every Grilling decision (permission,
+   * plan-is-ready, question) so a job runs end-to-end with zero human gates. When OFF, the
+   * Harness still auto-picks any recommended option and escalates only the no-recommendation
+   * case to the human.
+   */
+  bypass: boolean;
 }
 
-/** The default chains, as specified by the user. Agent names must exist in the registry. */
+/**
+ * The default chains. Agent names must exist in the registry. `chat` (ADR-0019) is handled by
+ * the local Orchestrator model itself, not an Agent chain, so its chain is empty — it is listed
+ * only to keep the config shape uniform across Capabilities.
+ */
 export const DEFAULT_CHAINS: Record<ChainKey, string[]> = {
   web_search: ["agy", "pi"],
   planning: ["claude", "codex", "pi"],
   image: ["codex", "agy"],
   coding: ["cursor", "codex", "claude", "agy", "opencode", "pi"],
+  chat: [],
 };
 
 export function configDir(): string {
@@ -48,9 +60,12 @@ export function configExists(): boolean {
 export async function loadConfig(): Promise<Config> {
   try {
     const raw = JSON.parse(await readFile(configPath(), "utf8")) as Partial<Config>;
-    return { chains: { ...DEFAULT_CHAINS, ...(raw.chains ?? {}) } };
+    return {
+      chains: { ...DEFAULT_CHAINS, ...(raw.chains ?? {}) },
+      bypass: raw.bypass ?? true, // ADR-0016: Bypass mode is default ON
+    };
   } catch {
-    return { chains: { ...DEFAULT_CHAINS } };
+    return { chains: { ...DEFAULT_CHAINS }, bypass: true };
   }
 }
 
