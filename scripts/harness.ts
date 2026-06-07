@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { identifySelf, identifyContext } from "../src/cmux.ts";
 import { runBroadcast, parseBroadcastArgs } from "../src/broadcast.ts";
 import { runUpdate } from "../src/update.ts";
+import { runWorkspaceCommand } from "../src/workspace-save.ts";
 import { ensureWorkspace, readPlan, currentBranch, listFiles } from "../src/workspace.ts";
 import { runTurn } from "../src/harness.ts";
 import { startFeedWatcher } from "../src/feed.ts";
@@ -48,6 +49,11 @@ if (args.includes("--help") || args.includes("-h")) {
       "  comux               launch the TUI (workspace: $COMUX_WORKSPACE or ./workspace)",
       "  comux all [text]    Broadcast: open every installed Agent's TUI; send text to all",
       "  comux update [--dev]  brew upgrade (or sync latest master with --dev)",
+      "  comux save [name|ref] [-o file]  save current (or named) cmux workspace to disk",
+      "  comux load <name> [--name title] [--focus]  restore a saved workspace",
+      "  comux list          list saved workspaces",
+      "  comux rename <name> [new-name] [--name title]",
+      "  comux delete <name>  delete a saved workspace (alias: rm)",
       "  comux --version     print version and exit",
       "  comux --help        show this help and exit",
       "",
@@ -81,6 +87,16 @@ if (args[0] === "all") {
   const cwd = cwdFlag ?? process.env.COMUX_WORKSPACE ?? process.cwd();
   const { surface, workspace } = await identifyContext();
   await runBroadcast(rest, { origin: surface, workspace, cwd });
+  process.exit(0);
+}
+
+// `comux save|load|list|rename|delete|rm` — workspace snapshot commands (no cmux/Ollama setup needed).
+const WS_COMMANDS = new Set(["save", "load", "list", "rename", "delete", "rm"]);
+if (args[0] && WS_COMMANDS.has(args[0])) {
+  await runWorkspaceCommand(args[0], args.slice(1)).catch((e: Error) => {
+    console.error(`error: ${e.message}`);
+    process.exit(1);
+  });
   process.exit(0);
 }
 
