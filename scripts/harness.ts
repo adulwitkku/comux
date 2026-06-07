@@ -5,8 +5,8 @@
 // minimal task spec; deterministic code routes coding work to an Agent that runs visibly in a
 // new cmux pane, then git-checkpoints the result in the workspace.
 //
-//   comux                  # workspace defaults to ./workspace (under the current dir)
-//   comux /path/to/repo    # use a specific repo as the workspace
+//   comux                  # workspace = $COMUX_WORKSPACE or ./workspace (under the current dir)
+//   comux all [text]       # Broadcast: open every installed Agent's TUI; send text to all
 //   comux --version | --help
 //
 // In the TUI:  type to chat · "/" commands · "@" file mentions · ⏎ run · ctrl+c exit
@@ -37,7 +37,7 @@ if (args.includes("--help") || args.includes("-h")) {
       `comux ${VERSION} — local-first AI orchestrator for cmux`,
       "",
       "Usage:",
-      "  comux [workspace]   launch the TUI (workspace defaults to ./workspace)",
+      "  comux               launch the TUI (workspace: $COMUX_WORKSPACE or ./workspace)",
       "  comux all [text]    Broadcast: open every installed Agent's TUI; send text to all",
       "  comux update [--dev]  brew upgrade (or sync latest master with --dev)",
       "  comux --version     print version and exit",
@@ -75,9 +75,16 @@ if (args[0] === "all") {
   process.exit(0);
 }
 
-const wsArg = args.find((a) => !a.startsWith("-"));
+// No positional workspace argument: `comux <name>` must NOT create/cd into a folder named after
+// the arg — that footgun hijacked subcommands like `all` (typing `comux all` made an `./all` repo).
+// The workspace is the default or $COMUX_WORKSPACE; a stray non-flag arg is an unknown command.
+const stray = args.find((a) => !a.startsWith("-"));
+if (stray) {
+  console.error(`comux: unknown command '${stray}' — see \`comux --help\``);
+  process.exit(2);
+}
 const workspace = await ensureWorkspace(
-  wsArg ?? process.env.COMUX_WORKSPACE ?? join(process.cwd(), "workspace"),
+  process.env.COMUX_WORKSPACE ?? join(process.cwd(), "workspace"),
 );
 const selfSurface = await identifySelf();
 const model = process.env.COMUX_MODEL ?? "gemma4:12b-mlx";
