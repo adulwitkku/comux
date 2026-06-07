@@ -1,6 +1,6 @@
 {
   "name": "comux",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local-first AI orchestrator that runs coding agents visibly inside cmux",
   "license": "MIT",
   "type": "module",
@@ -38,6 +38,7 @@
     "smoke:m2": "bun run scripts/smoke-m2.ts",
     "smoke:m3": "bun run scripts/smoke-m3.ts",
     "smoke:setup": "bun run scripts/smoke-setup.ts",
+    "smoke:broadcast": "bun run scripts/smoke-broadcast.ts",
     "live:m3": "bun run scripts/live-m3.ts",
     "spike:m5": "bun run scripts/spike-m5.ts",
     "compare:pi": "bun run scripts/compare-pi.ts",

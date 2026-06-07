@@ -25,7 +25,7 @@ await runTurn(goal, {
   workspace,
   selfSurface,
   config: await loadConfig(),
-  confirm: async () => {
+  confirmPlan: async () => {
     console.log("[auto-approve plan]");
     return true;
   },

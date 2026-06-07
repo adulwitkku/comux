@@ -50,5 +50,12 @@ if (withPi) {
 function print(who: string, s: TaskSpec) {
   const action = s.task !== null ? "DISPATCH" : "REPLY";
   console.log(`${who}: [${action}]`);
-  console.log(`  ${s.task ?? s.reply}\n`);
+  if (s.task) {
+    console.log(`  capability: ${s.capability ?? "(none)"}`);
+    if (s.topic) console.log(`  topic: ${s.topic}`);
+    console.log(`  task: ${s.task}`);
+  } else {
+    console.log(`  ${s.reply}`);
+  }
+  console.log();
 }

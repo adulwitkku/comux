@@ -13,7 +13,9 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { identifySelf } from "../src/cmux.ts";
+import { identifySelf, identifyContext } from "../src/cmux.ts";
+import { runBroadcast, parseBroadcastArgs } from "../src/broadcast.ts";
+import { runUpdate } from "../src/update.ts";
 import { ensureWorkspace, readPlan, currentBranch, listFiles } from "../src/workspace.ts";
 import { runTurn } from "../src/harness.ts";
 import { Tui, type Item } from "../src/tui.ts";
@@ -36,6 +38,8 @@ if (args.includes("--help") || args.includes("-h")) {
       "",
       "Usage:",
       "  comux [workspace]   launch the TUI (workspace defaults to ./workspace)",
+      "  comux all [text]    Broadcast: open every installed Agent's TUI; send text to all",
+      "  comux update [--dev]  brew upgrade (or sync latest master with --dev)",
       "  comux --version     print version and exit",
       "  comux --help        show this help and exit",
       "",
@@ -49,6 +53,25 @@ if (args.includes("--help") || args.includes("-h")) {
       "Needs a running cmux, Ollama serving the model, and an Agent CLI (pi) on PATH.",
     ].join("\n"),
   );
+  process.exit(0);
+}
+
+// `comux update [--dev]` — refresh the install (brew upgrade, or sync master with --dev). No cmux
+// needed, so handle it before anything that touches the workspace or the cmux surface.
+if (args[0] === "update") {
+  await runUpdate(args.slice(1));
+  process.exit(0);
+}
+
+// `comux all [--cwd DIR] [text...]` — Broadcast mode (ADR-0014): open every installed Agent's
+// bare interactive TUI side-by-side and send the same text to all. This is a manual, unconfined
+// fan-out that bypasses the orchestrator entirely, so it is handled here before the TUI path.
+if (args[0] === "all") {
+  const rest = args.slice(1);
+  const { cwd: cwdFlag } = parseBroadcastArgs(rest);
+  const cwd = cwdFlag ?? process.env.COMUX_WORKSPACE ?? process.cwd();
+  const { surface, workspace } = await identifyContext();
+  await runBroadcast(rest, { origin: surface, workspace, cwd });
   process.exit(0);
 }
 
@@ -107,7 +130,7 @@ function statusBar(): string {
 
 const tui = new Tui({ commands, status: statusBar, listFiles: () => listFiles(workspace) });
 const say = (m: string) => tui.print(m);
-const confirm = async (_summary: string) =>
+const confirmPlan = async (_summary: string) =>
   autoYes ? true : tui.confirm("อนุมัติแผนนี้แล้วรันทั้งหมดเลยไหม?");
 
 tui.printHeader();
@@ -158,7 +181,7 @@ loop: for (;;) {
   }
 
   try {
-    await runTurn(line, { workspace, selfSurface, config, confirm, say });
+    await runTurn(line, { workspace, selfSurface, config, confirmPlan, say });
   } catch (e) {
     say(c.red(`  ⚠ error: ${(e as Error).message}`));
   }

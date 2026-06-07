@@ -24,21 +24,32 @@ deterministic Harness loop is the conductor, not the model)
 An external, more-capable coding CLI that does the actual work. The "hands" of the system.
 Two Agents are wired in — `pi` and Claude Code (`claude`) — and were used together to validate
 Handover; Codex, Cursor, and Antigravity remain roadmap targets. The Scheduler that picks
-between them per Step is still M4.
+between them per Step is still M4. Every Agent runs as its **real interactive TUI** in a cmux
+pane (ADR-0001) — not a headless `-p` invocation.
 _Avoid_: Worker, CLI
 
 **Task spec**:
 The minimal structured output of the Orchestrator: one JSON object `{reply, task, capability}`
 where `reply` and `task` are mutually exclusive — `reply` (the Orchestrator answers the user
 directly) or `task` (a natural-language instruction to dispatch, tagged with a Capability). It
-names WHAT to do, never WHO does it — config + the Scheduler pick the Agent. The only artifact
-the Orchestrator is responsible for producing.
+names WHAT to do, never WHO does it — config + the Scheduler pick the Agent. Dispatched `task`
+strings are always in **English** — a clear instruction rephrased from the user's intent, not a
+literal word-for-word translation — even when the user wrote in another language. For `web_search`,
+when a `topic` is present the `task` also names the optional Thai artifact (`search_<topic>.md`). The only artifact the Orchestrator is responsible
+for producing. A dispatched `web_search` or `image` task may optionally carry a **`topic`** slug
+(e.g. `neighborsoft`); when present, the optional Thai markdown artifact is named
+`search_<topic>.md` or `image_<topic>.md` respectively.
 
 **Capability**:
 The kind of work a dispatched task is — `web_search`, `image`, or `coding` (a chat reply has
 none). The Orchestrator classifies the message into a Capability; deterministic config maps each
 Capability to its own Agent chain. It is a classification of the work, never an Agent name
-(ADR-0011).
+(ADR-0011). `web_search` and `image` are **single dispatches** (not PLAN-walks): the user watches
+the Agent work in its visible pane; an optional Thai markdown summary in the workspace may be
+written as a readable artifact (opened via cmux when present), but absence of that file is not a
+failure. The same optional-artifact rules apply to both `web_search` and `image`.
+Single dispatches run without a human confirm gate. A coding job uses a separate **plan
+approval** step (approve the PLAN.md once, then walk Steps autonomously).
 
 **Handover**:
 The transfer of an in-progress job from a failed/exhausted Agent to the next Agent in
@@ -88,4 +99,15 @@ rest of the job (timed Cooldown is the open M4 work).
 **Cooldown**:
 A temporary "unavailable" mark on an Agent that hit a quota/rate-limit, with a reset window
 after which it becomes selectable again.
+
+**Broadcast**:
+A manual fan-out mode (`comux all`) that opens every **installed** registry Agent as its bare
+interactive TUI side-by-side and sends the same text to all of them at once, for the human to
+drive and compare. It deliberately bypasses the orchestration core — no Orchestrator intent
+parse, no Capability/chain/Scheduler, no PLAN/Step/Acceptance check, no Checkpoint — and runs the
+Agents **unconfined in a shared cwd** (the sandbox of ADR-0005 does not apply). It is an
+advisory/compare playground, not autonomous orchestration; collisions between Agents writing the
+same files are the human's responsibility.
+_Avoid_: Dispatch (a Dispatch is a single routed task through a chain; a Broadcast is the
+opposite — unrouted, to everyone at once)
 

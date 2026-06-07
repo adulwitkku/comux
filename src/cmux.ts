@@ -26,6 +26,14 @@ export async function identifySelf(): Promise<SurfaceRef> {
   return t.caller.surface_ref;
 }
 
+/** The caller's surface and the cmux workspace it lives in (Broadcast keys its state by the latter). */
+export async function identifyContext(): Promise<{ surface: SurfaceRef; workspace: string }> {
+  const t = await runJSON<{ caller: { surface_ref: SurfaceRef; workspace_ref: string } }>([
+    "identify",
+  ]);
+  return { surface: t.caller.surface_ref, workspace: t.caller.workspace_ref };
+}
+
 /** Split off `fromSurface` and return the new (empty) terminal surface. */
 export async function newSplit(
   fromSurface: SurfaceRef,
@@ -78,6 +86,23 @@ export async function closeSurface(surface: SurfaceRef): Promise<void> {
   await run(["close-surface", "--surface", surface]);
 }
 
+// --- Buffer paste (Broadcast, ADR-0014) ---
+// Some TUIs (cursor) drop bracketed/typed input but accept a named-buffer paste. `set-buffer`
+// stows the text globally; `paste-buffer` drops it into a surface. Shapes mirror the calls
+// validated in ai.py, adapted to comux's surface-addressed style (no explicit --workspace).
+
+/** Store `text` in a named cmux buffer (global; not bound to a surface). */
+export async function setBuffer(name: string, text: string): Promise<void> {
+  const { code, stderr } = await run(["set-buffer", "--name", name, "--", text]);
+  if (code !== 0) throw new Error(`cmux set-buffer failed: ${stderr.trim()}`);
+}
+
+/** Paste a named buffer's contents into a surface (does NOT submit). */
+export async function pasteBuffer(name: string, surface: SurfaceRef): Promise<void> {
+  const { code, stderr } = await run(["paste-buffer", "--name", name, "--surface", surface]);
+  if (code !== 0) throw new Error(`cmux paste-buffer failed: ${stderr.trim()}`);
+}
+
 // --- Orchestrator status surfaced into the cmux UI (the PRD "top log") ---
 
 export async function setStatus(key: string, value: string): Promise<void> {
@@ -86,4 +111,26 @@ export async function setStatus(key: string, value: string): Promise<void> {
 
 export async function log(message: string): Promise<void> {
   await run(["log", "--source", "harness", message]);
+}
+
+/** Open a markdown file in cmux's viewer panel (live-reloads on disk changes). */
+export async function openMarkdown(
+  filePath: string,
+  opts?: { surface?: SurfaceRef; noFocus?: boolean },
+): Promise<void> {
+  const noFocus = opts?.noFocus ?? true;
+  const focusVal = noFocus ? "false" : "true";
+  const attempts: string[][] = [];
+  if (opts?.surface) {
+    attempts.push(["markdown", "open", filePath, "--surface", opts.surface, "--focus", focusVal]);
+  }
+  attempts.push(["markdown", "open", filePath, "--focus", focusVal]);
+
+  let lastErr = "";
+  for (const args of attempts) {
+    const { code, stderr, stdout } = await run(args);
+    if (code === 0) return;
+    lastErr = stderr.trim() || stdout.trim();
+  }
+  throw new Error(`cmux markdown open failed: ${lastErr}`);
 }

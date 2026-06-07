@@ -20,3 +20,8 @@ keystroke injection, to avoid fragile TUI timing while still showing the real TU
 
 - **Headless + stream-json** — most robust control, rejected: hides live progress from the user.
 - **PTY keystroke injection + regex scan** (original PRD) — rejected: fragile input and false-positive kills.
+
+## Status
+
+ADR-0012 closes a temporary implementation drift: the M1–M4 registry launched Agents with
+headless `-p` flags. New work restores interactive launch as specified here.

@@ -12,6 +12,7 @@ process.env.XDG_CONFIG_HOME = xdg;
 const { DEFAULT_CHAINS, loadConfig, saveConfig, configExists, configPath } = await import("../src/config.ts");
 const { REGISTRY, agentByName, AGENT_BINARIES, pi } = await import("../src/agents.ts");
 const { detectAgents } = await import("../src/setup.ts");
+const { slugTopic, artifactFilename, topicFromTask, inferTopicFromInput, resolveTopic } = await import("../src/orchestrator.ts");
 
 function ok(label: string, pass: boolean, detail = "") {
   console.log(`${pass ? "PASS" : "FAIL"}  ${label}${detail ? `  — ${detail}` : ""}`);
@@ -48,6 +49,25 @@ try {
 
   // --- a bad name resolves to nothing (caller skips it) ---
   ok("agentByName('nope') is undefined", agentByName("nope") === undefined);
+
+  ok("slugTopic normalises a topic slug", slugTopic("  NeighborSoft! ") === "neighborsoft");
+  ok("artifactFilename prefixes by capability", artifactFilename("web_search", "neighborsoft") === "search_neighborsoft.md");
+  ok("artifactFilename prefixes image separately", artifactFilename("image", "logo") === "image_logo.md");
+  ok(
+    "topicFromTask parses search_<topic>.md from the English task",
+    topicFromTask("Save a Thai summary as search_neighborsoft.md", "web_search") === "neighborsoft",
+  );
+  ok(
+    "inferTopicFromInput reads Thai search phrasing",
+    inferTopicFromInput("ค้นหาเว็บ neighborsoft") === "neighborsoft",
+  );
+  ok(
+    "resolveTopic falls back to the user message",
+    resolveTopic(
+      { reply: null, task: "Search the web for NeighborSoft.", capability: "web_search", topic: null },
+      "ค้นหาเว็บ neighborsoft",
+    ) === "neighborsoft",
+  );
   void configPath;
 } finally {
   rmSync(xdg, { recursive: true, force: true });

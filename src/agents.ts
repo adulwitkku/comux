@@ -1,7 +1,11 @@
 // Agent registry. Each Agent knows how to turn a task instruction into a shell command that
-// runs it non-interactively in its working directory. WHICH Agent runs is decided by the
-// Scheduler walking a Capability's chain (ADR-0004, src/scheduler.ts); this file only defines
-// the Agents the chains can name.
+// runs it in its working directory. WHICH Agent runs is decided by the Scheduler walking a
+// Capability's chain (ADR-0004, src/scheduler.ts); this file only defines the Agents the chains
+// can name.
+//
+// Every Agent launches as its real interactive TUI in a cmux pane (ADR-0001, ADR-0012). The
+// English task is seeded via the launch argument; completion is detected out-of-band (exit
+// sentinel + watchdog), not from the visible screen.
 //
 // Every built command is run through `confine` so the Agent can only write inside its workspace
 // repo (ADR-0005). Agents that gate tool use behind their own permission prompt are told to
@@ -9,10 +13,31 @@
 
 import { confine } from "./sandbox.ts";
 
+/** How Broadcast (ADR-0014) delivers text into an Agent's TUI — TUIs disagree on this. */
+export type PasteMode = "bracketed" | "buffer" | "typed";
+
 export interface Agent {
   name: string;
-  /** Build the shell command that launches the agent against `task` inside `cwd`. */
+  /** Build the shell command that launches the agent against `task` inside `cwd` (confined). */
   buildCommand(task: string, cwd: string): string;
+  // --- Broadcast mode (ADR-0014): bare interactive launch + how to type into its TUI. ---
+  // These are unused by the orchestrated flow, which only calls buildCommand.
+  /** Bare interactive launch: no task seed, no exit sentinel, no `confine`. */
+  openCommand: string;
+  /** How Broadcast pushes text into this Agent's running TUI. */
+  pasteMode: PasteMode;
+  /** Key that submits a message in this TUI (after the text is delivered). */
+  submitKey: string;
+  /** Key that inserts a newline without submitting (only used by pasteMode "typed"). */
+  newlineKey: string;
+}
+
+/** Per-Agent overrides for the Broadcast launch/send profile (sensible defaults otherwise). */
+interface BroadcastProfile {
+  openCommand?: string;
+  pasteMode?: PasteMode;
+  submitKey?: string;
+  newlineKey?: string;
 }
 
 /** Single-quote a string for safe use inside a shell command. */
@@ -21,32 +46,39 @@ function shq(s: string): string {
 }
 
 /** Build an Agent from a launch-command template (everything is confined to `cwd`). */
-function agent(name: string, launch: (taskq: string) => string): Agent {
+function agent(name: string, launch: (taskq: string) => string, b: BroadcastProfile = {}): Agent {
   return {
     name,
     buildCommand: (task, cwd) => confine(`cd ${shq(cwd)} && ${launch(shq(task))}`, cwd),
+    openCommand: b.openCommand ?? name,
+    pasteMode: b.pasteMode ?? "bracketed",
+    submitKey: b.submitKey ?? "enter",
+    newlineKey: b.newlineKey ?? "shift+enter",
   };
 }
 
-// pi runs the task non-interactively with its read/bash/edit/write tools, then exits.
-export const pi = agent("pi", (t) => `pi -p --no-session ${t}`);
+// pi — runs the task non-interactively with its tools, then exits. Its TUI takes text typed
+// line-by-line (Enter submits, Shift+Enter is a newline), so Broadcast types rather than pastes.
+export const pi = agent("pi", (t) => `pi -p --no-session ${t}`, { pasteMode: "typed" });
 
-// Claude Code, headless. --dangerously-skip-permissions is safe because the sandbox is the real
-// write boundary (ADR-0005), not Claude's own permission gate.
-export const claudeCode = agent("claude", (t) => `claude -p ${t} --dangerously-skip-permissions`);
+// Claude Code — interactive by default; skip its permission gate (sandbox is the boundary).
+export const claudeCode = agent("claude", (t) => `claude ${t} --dangerously-skip-permissions`);
 
-// agy, headless (same shape as Claude Code).
+// agy — runs the task non-interactively with its tools, then exits.
 export const agy = agent("agy", (t) => `agy -p ${t} --dangerously-skip-permissions`);
 
-// Codex, non-interactive. The bypass flag is intended for externally-sandboxed environments —
-// which is exactly our `sandbox-exec` confinement.
-export const codex = agent("codex", (t) => `codex exec --dangerously-bypass-approvals-and-sandbox ${t}`);
+// Codex — interactive CLI; bypass flag is for externally-sandboxed environments (our confinement).
+export const codex = agent("codex", (t) => `codex ${t} --dangerously-bypass-approvals-and-sandbox`);
 
-// Cursor CLI, headless. --force (a.k.a. --yolo) auto-approves commands.
-export const cursor = agent("cursor", (t) => `cursor-agent -p --force ${t}`);
+// Cursor CLI — interactive with --force (yolo) so the sandbox is the real gate. Its TUI needs a
+// buffer paste (set-buffer + paste-buffer) rather than bracketed input.
+export const cursor = agent("cursor", (t) => `cursor-agent --force ${t}`, {
+  openCommand: "cursor-agent",
+  pasteMode: "buffer",
+});
 
-// opencode, non-interactive run.
-export const opencode = agent("opencode", (t) => `opencode run ${t}`);
+// opencode — interactive TUI with an initial --prompt.
+export const opencode = agent("opencode", (t) => `opencode --prompt ${t}`);
 
 /** Every Agent the chains may reference, keyed by the name used in config. */
 export const REGISTRY: Record<string, Agent> = {
