@@ -120,7 +120,7 @@ export function stepPrompt(step: Step): string {
 }
 
 /** The markdown file every dispatch writes its answer/summary to; the Harness opens it (ADR-0018). */
-export const REPORT_FILE = "REPORT.md";
+export const REPORT_FILE = ".comux/REPORT.md";
 
 /**
  * Appended to every implementation/single dispatch so the Agent's answer lands as a markdown

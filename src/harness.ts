@@ -95,30 +95,40 @@ async function chatDispatch(
 ): Promise<void> {
   await setStatus("harness", "chat");
   const md = await chatReply(input, ctx);
-  const file = join(deps.workspace, "chat.md");
+  const file = join(deps.workspace, ".comux", "chat.md");
   await writeFile(file, md.endsWith("\n") ? md : md + "\n");
   await setStatus("harness", "idle");
   await openReport(file, deps);
 }
 
-/** Find an optional markdown artifact on disk (exact topic path, else newest prefix match). */
+/** Find an optional markdown artifact on disk (exact topic path, else newest prefix match).
+ *  Checks .comux/ first (preferred), then the workspace root (agent fallback). */
 function findArtifactPath(
   workspace: string,
   capability: "web_search" | "image",
   topic: string | null,
 ): string | null {
-  if (topic) {
-    const exact = join(workspace, artifactFilename(capability, topic));
-    if (existsSync(exact)) return exact;
-  }
+  const dirs = [join(workspace, ".comux"), workspace];
   const prefix = capability === "web_search" ? "search_" : "image_";
-  const matches = readdirSync(workspace)
-    .filter((name) => name.startsWith(prefix) && name.endsWith(".md"))
-    .map((name) => join(workspace, name));
+
+  if (topic) {
+    const filename = artifactFilename(capability, topic);
+    for (const dir of dirs) {
+      const exact = join(dir, filename);
+      if (existsSync(exact)) return exact;
+    }
+  }
+
+  const matches: string[] = [];
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    readdirSync(dir)
+      .filter((name) => name.startsWith(prefix) && name.endsWith(".md"))
+      .forEach((name) => matches.push(join(dir, name)));
+  }
   if (!matches.length) return null;
   if (matches.length === 1) return matches[0]!;
-  const newest = matches.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
-  return newest ?? null;
+  return matches.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0] ?? null;
 }
 
 /** Open a markdown artifact in cmux's viewer, reporting success/failure to the user. */

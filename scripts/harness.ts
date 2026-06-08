@@ -46,7 +46,7 @@ if (args.includes("--help") || args.includes("-h")) {
       `comux ${VERSION} — local-first AI orchestrator for cmux`,
       "",
       "Usage:",
-      "  comux               launch the TUI (workspace: $COMUX_WORKSPACE or ./workspace)",
+      "  comux               launch the TUI (workspace: $COMUX_WORKSPACE or current directory)",
       "  comux all [text]    Broadcast: open every installed Agent's TUI; send text to all",
       "  comux update [--dev]  brew upgrade (or sync latest master with --dev)",
       "  comux save [name|ref] [-o file]  save current (or named) cmux workspace to disk",
@@ -109,7 +109,7 @@ if (stray) {
   process.exit(2);
 }
 const workspace = await ensureWorkspace(
-  process.env.COMUX_WORKSPACE ?? join(process.cwd(), "workspace"),
+  process.env.COMUX_WORKSPACE ?? process.cwd(),
 );
 const selfSurface = await identifySelf();
 const model = process.env.COMUX_MODEL ?? "gemma4:12b-mlx";

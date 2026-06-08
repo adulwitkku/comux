@@ -1,8 +1,11 @@
-// The workspace: the git repo Agents work inside. Kept separate from the harness repo so
-// Agents are confined to their own project (ADR-0005) and the harness stays clean.
+// The workspace: the project directory the user runs comux from (ADR-0020).
+// No longer a separate subdirectory — since ADR-0017 dropped write-confinement, the isolated
+// ./workspace/ repo lost its sole justification. Agents work in the real project; checkpoints
+// land in the project's own git history. Session files (chat, reports, search artifacts) live
+// in .comux/ which is auto-added to .gitignore.
 
 import { existsSync, readdirSync } from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 async function git(args: string[], cwd: string): Promise<string> {
@@ -17,11 +20,28 @@ export async function ensureWorkspace(dir: string): Promise<string> {
   await mkdir(dir, { recursive: true });
   if (!existsSync(join(dir, ".git"))) {
     await git(["init", "-q"], dir);
-    // Local identity so the harness can commit even on a fresh machine.
+  }
+  // Set fallback identity only when the repo has none — don't override the user's own config.
+  const hasEmail = (await git(["config", "user.email"], dir)).trim().length > 0;
+  if (!hasEmail) {
     await git(["config", "user.email", "harness@local"], dir);
     await git(["config", "user.name", "comux"], dir);
   }
+  // Harness session files live here, kept out of the project's git history.
+  await mkdir(join(dir, ".comux"), { recursive: true });
+  await ensureGitIgnore(dir);
   return dir;
+}
+
+async function ensureGitIgnore(dir: string): Promise<void> {
+  const p = join(dir, ".gitignore");
+  const entry = ".comux/";
+  let content = "";
+  if (existsSync(p)) {
+    content = await readFile(p, "utf8");
+    if (content.split("\n").some((l) => l.trim() === entry || l.trim() === ".comux")) return;
+  }
+  await writeFile(p, content + (content && !content.endsWith("\n") ? "\n" : "") + entry + "\n");
 }
 
 /** The PLAN.md the Orchestrator reads as its memory; placeholder text when absent. */
