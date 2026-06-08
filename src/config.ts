@@ -36,7 +36,7 @@ export interface Config {
  * only to keep the config shape uniform across Capabilities.
  */
 export const DEFAULT_CHAINS: Record<ChainKey, string[]> = {
-  web_search: ["agy", "pi"],
+  web_search: ["pi", "agy"],
   planning: ["claude", "codex", "pi"],
   image: ["codex", "agy"],
   coding: ["cursor", "codex", "claude", "agy", "opencode", "pi"],

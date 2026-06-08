@@ -29,6 +29,8 @@ export interface ChainOutcome {
   /** The Agent that succeeded, or null if the whole chain was exhausted. */
   agent: string | null;
   attempts: ChainAttempt[];
+  /** The cmux surface the successful Agent ran in; callers may close it when ready. */
+  surface?: SurfaceRef;
 }
 
 export interface ChainRunOpts {
@@ -59,6 +61,10 @@ export async function runWithChain(opts: ChainRunOpts): Promise<ChainOutcome> {
     }
     if (opts.down.has(name)) continue; // already unavailable this job
 
+    // Tab title: "comux-<label>-<agent>" with label sanitized (e.g. "step 2/3" → "step-2-3").
+    const safeLabel = opts.label.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
+    const tabTitle = `comux-${safeLabel}-${name}`;
+
     opts.say(ui.running(`${opts.label}: ${name} in a new pane…`));
     const r = await runAgentStep({
       fromSurface: opts.fromSurface,
@@ -69,6 +75,7 @@ export async function runWithChain(opts: ChainRunOpts): Promise<ChainOutcome> {
       // exit sentinel. headless Agents (pi/agy) still resolve via the sentinel below.
       lifecycleAgent: agent.hookName,
       workspace: opts.workspace,
+      tabTitle,
     });
 
     if (r.outcome === "stuck") {
@@ -96,7 +103,7 @@ export async function runWithChain(opts: ChainRunOpts): Promise<ChainOutcome> {
     }
 
     attempts.push({ agent: name, result: "completed" });
-    return { ok: true, agent: name, attempts };
+    return { ok: true, agent: name, attempts, surface: r.surface };
   }
 
   return { ok: false, agent: null, attempts };

@@ -137,6 +137,18 @@ export function outputInstruction(): string {
 }
 
 /**
+ * Appended to `image` dispatches: ask the Agent to copy the generated image into the workspace
+ * so the Harness can find and open it without agent-specific path knowledge.
+ */
+export function imageInstruction(): string {
+  return [
+    "",
+    "After generating the image, copy it to `.comux/result.png` (or `.jpg`/`.webp` as appropriate)",
+    "in the current working directory so the Harness can display it. Create `.comux/` if needed.",
+  ].join("\n");
+}
+
+/**
  * Appended to dispatches that may benefit from a real browser (ADR-0018): the Agent can test a web
  * app it built or gather information by driving cmux's browser. Only skill/CLI-capable Agents will
  * act on it; it is harmless otherwise.

@@ -36,11 +36,15 @@ import {
   planPrompt,
   stepPrompt,
   outputInstruction,
+  imageInstruction,
   browserHint,
   REPORT_FILE,
   type Step,
 } from "./plan.ts";
-import { setStatus, log, openMarkdown, closeSurface, type SurfaceRef } from "./cmux.ts";
+import {
+  setStatus, log, openMarkdown, openFile, renameTab, findResultSurface, closeSurface,
+  type SurfaceRef,
+} from "./cmux.ts";
 import { ui, c } from "./ui.ts";
 import type { Config, Capability } from "./config.ts";
 
@@ -56,10 +60,6 @@ export interface TurnDeps {
   /** Emit a line to the user. */
   say: (msg: string) => void;
   watchdogMs?: number;
-  /** Session-level surface of the currently open chat markdown viewer. */
-  getChatSurface?: () => SurfaceRef | null;
-  /** Update the session-level chat surface after opening a new chat file. */
-  setChatSurface?: (s: SurfaceRef | null) => void;
 }
 
 export async function runTurn(input: string, deps: TurnDeps): Promise<void> {
@@ -92,8 +92,8 @@ export async function runTurn(input: string, deps: TurnDeps): Promise<void> {
 }
 
 /** The `chat` Capability (ADR-0019): the local model writes a markdown reply the Harness opens.
- *  Each reply goes to the next sequential file (chat1.md, chat2.md, …); the previous viewer
- *  surface is closed first so only one chat tab is ever open at a time. */
+ *  Each reply goes to the next sequential file (chat1.md, chat2.md, …). The previous
+ *  comux-result tab is closed first so only one result tab is ever open at a time. */
 async function chatDispatch(
   input: string,
   ctx: { planMd: string; gitLog: string },
@@ -103,14 +103,10 @@ async function chatDispatch(
   const { contextMd, readmeMd } = await readProjectDocs(deps.workspace);
   const md = await chatReply(input, { ...ctx, contextMd, readmeMd });
 
-  const prev = deps.getChatSurface?.();
-  if (prev) await closeSurface(prev).catch(() => {});
-
   const file = nextChatFile(deps.workspace);
   await writeFile(file, md.endsWith("\n") ? md : md + "\n");
   await setStatus("harness", "idle");
-  const newSurface = await openReportTracked(file, deps);
-  deps.setChatSurface?.(newSurface);
+  await openResult(file, deps);
 }
 
 /** Find an optional markdown artifact on disk (exact topic path, else newest prefix match).
@@ -143,19 +139,48 @@ function findArtifactPath(
   return matches.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0] ?? null;
 }
 
-/** Open a markdown artifact in cmux's viewer, reporting success/failure to the user. */
-async function openReport(path: string, deps: TurnDeps): Promise<void> {
-  await openReportTracked(path, deps);
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
+
+/** Find the newest image file written to workspace/.comux or workspace root since `since` ms. */
+function findImagePath(workspace: string, since: number): string | null {
+  const dirs = [join(workspace, ".comux"), workspace];
+  const candidates: string[] = [];
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir)) {
+      const ext = name.split(".").pop()?.toLowerCase() ?? "";
+      if (!IMAGE_EXTS.has(ext)) continue;
+      const full = join(dir, name);
+      const mtime = statSync(full).mtimeMs;
+      if (mtime >= since) candidates.push(full);
+    }
+  }
+  if (!candidates.length) return null;
+  return candidates.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0] ?? null;
 }
 
-/** Like openReport but returns the surface ref so callers can track and close it later. */
-async function openReportTracked(path: string, deps: TurnDeps): Promise<SurfaceRef | null> {
+/**
+ * Close any existing "comux-result" tab, open `path` in cmux's viewer (image or markdown),
+ * and rename the new tab to "comux-result" so future opens can find and close it by name.
+ */
+async function openResult(path: string, deps: TurnDeps): Promise<SurfaceRef | null> {
+  const existing = await findResultSurface().catch(() => null);
+  if (existing) await closeSurface(existing).catch(() => {});
+
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  const isImage = IMAGE_EXTS.has(ext);
+
   try {
-    const surface = await openMarkdown(path, { surface: deps.selfSurface });
-    deps.say(ui.ok(`เปิด ${basename(path)} ใน markdown viewer`));
-    return surface;
+    const surface = isImage
+      ? await openFile(path, { surface: deps.selfSurface })
+      : await openMarkdown(path, { surface: deps.selfSurface });
+    if (surface) {
+      await renameTab(surface, "comux-result").catch(() => {});
+      deps.say(ui.ok(`เปิด ${basename(path)} ใน viewer`));
+    }
+    return surface ?? null;
   } catch (e) {
-    deps.say(ui.warn(`เปิด ${basename(path)} ใน markdown viewer ไม่ได้: ${(e as Error).message}`));
+    deps.say(ui.warn(`เปิด ${basename(path)} ไม่ได้: ${(e as Error).message}`));
     return null;
   }
 }
@@ -172,9 +197,14 @@ async function singleDispatch(
   await setStatus("harness", `running ${capability}`);
   await log(`${capability}: ${goal}`);
 
-  // ADR-0018: the answer is always a markdown artifact; web_search may also drive a browser.
+  const dispatchStartMs = Date.now();
+
+  // web_search: pi uses its native search tools — no browser hint (it confuses the agent).
+  // image: tell the agent to save the output to .comux/result.<ext> so we can open it.
   const prompt =
-    goal + outputInstruction() + (capability === "web_search" ? browserHint() : "");
+    capability === "image"
+      ? goal + outputInstruction() + imageInstruction() + browserHint()
+      : goal + outputInstruction();
 
   const outcome = await runWithChain({
     chain,
@@ -198,10 +228,19 @@ async function singleDispatch(
     : null;
   deps.say(ui.ok(`เสร็จแล้ว (${outcome.agent})${hash ? ` — checkpoint ${hash}` : ""}`));
 
-  const topic = resolveTopic(spec, userInput);
-  const artifactPath =
-    findArtifactPath(deps.workspace, capability, topic) ?? reportPath(deps.workspace);
-  if (artifactPath) await openReport(artifactPath, deps);
+  // For image: prefer a generated image file over the markdown report.
+  let artifactPath: string | null = null;
+  if (capability === "image") {
+    artifactPath = findImagePath(deps.workspace, dispatchStartMs);
+  }
+  if (!artifactPath) {
+    const topic = resolveTopic(spec, userInput);
+    artifactPath = findArtifactPath(deps.workspace, capability, topic) ?? reportPath(deps.workspace);
+  }
+  if (artifactPath) await openResult(artifactPath, deps);
+
+  // Close the agent pane after the result is open so single dispatches don't litter panes.
+  if (outcome.surface) await closeSurface(outcome.surface).catch(() => {});
 }
 
 /** The conventional REPORT.md the Harness opens after a dispatch, if the Agent wrote one. */
@@ -303,5 +342,5 @@ async function walkPlan(
 
   // ADR-0018: open the Agent-authored report for the finished job, if there is one.
   const report = reportPath(deps.workspace);
-  if (report) await openReport(report, deps);
+  if (report) await openResult(report, deps);
 }

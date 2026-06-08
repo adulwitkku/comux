@@ -113,6 +113,58 @@ export async function log(message: string): Promise<void> {
   await run(["log", "--source", "harness", message]);
 }
 
+/** Open any file (image, PDF, etc.) in cmux's preview panel. Returns the surface ref. */
+export async function openFile(
+  filePath: string,
+  opts?: { surface?: SurfaceRef },
+): Promise<SurfaceRef | null> {
+  const args = ["open", filePath, "--focus", "false"];
+  if (opts?.surface) args.push("--surface", opts.surface);
+  const { code, stdout, stderr } = await run(["--json", ...args]);
+  if (code !== 0) throw new Error(`cmux open failed: ${stderr.trim() || stdout.trim()}`);
+  try {
+    const r = JSON.parse(stdout) as { opened?: Array<{ payload?: { surface_ref?: SurfaceRef } }> };
+    return r.opened?.[0]?.payload?.surface_ref ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Rename the tab that contains `surface` so it can later be found by title. */
+export async function renameTab(surface: SurfaceRef, title: string): Promise<void> {
+  await run(["rename-tab", "--surface", surface, title]);
+}
+
+/** Find the surface whose tab is titled exactly "comux-result"; null if none. */
+export async function findResultSurface(): Promise<SurfaceRef | null> {
+  const { code, stdout } = await run(["--json", "list-panels"]);
+  if (code !== 0) return null;
+  try {
+    const r = JSON.parse(stdout) as { surfaces?: Array<{ title?: string; ref?: SurfaceRef }> };
+    return r.surfaces?.find((s) => s.title === "comux-result")?.ref ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Close all open agent surfaces (tabs titled "comux-*" but not "comux-result").
+ * Called before opening a new agent pane so stale agent tabs don't accumulate.
+ */
+export async function closeAgentSurfaces(): Promise<void> {
+  const { code, stdout } = await run(["--json", "list-panels"]);
+  if (code !== 0) return;
+  try {
+    const r = JSON.parse(stdout) as { surfaces?: Array<{ title?: string; ref?: SurfaceRef }> };
+    const stale = (r.surfaces ?? []).filter(
+      (s) => s.ref && s.title?.startsWith("comux-") && s.title !== "comux-result",
+    );
+    await Promise.all(stale.map((s) => closeSurface(s.ref!).catch(() => {})));
+  } catch {
+    /* best-effort */
+  }
+}
+
 /** Open a markdown file in cmux's viewer panel (live-reloads on disk changes).
  *  Returns the surface ref of the viewer, or null if unavailable. */
 export async function openMarkdown(

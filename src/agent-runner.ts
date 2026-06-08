@@ -24,6 +24,8 @@ import {
   sendLine,
   readScreen,
   closeSurface,
+  renameTab,
+  closeAgentSurfaces,
   type SurfaceRef,
 } from "./cmux.ts";
 import { readAgentLifecycle } from "./lifecycle.ts";
@@ -48,6 +50,8 @@ export interface StepOptions {
   lifecycleAgent?: string;
   /** Workspace cwd to match the lifecycle session against (paired with `lifecycleAgent`). */
   workspace?: string;
+  /** Tab title for the agent pane (e.g. "comux-plan-claude"). Renames after launch. */
+  tabTitle?: string;
 }
 
 export type StepResult =
@@ -60,12 +64,20 @@ export async function runAgentStep(opts: StepOptions): Promise<StepResult> {
   const pollMs = opts.pollMs ?? 1_000;
   const useLifecycle = Boolean(opts.lifecycleAgent && opts.workspace);
 
+  // Close stale agent panes before opening a new one (issue 2: avoid accumulating panes).
+  await closeAgentSurfaces().catch(() => {});
+
   const surface = await newSplit(opts.fromSurface, "down", false);
+
+  const launchedAtMs = Date.now();
   // Seed the task via the launch command; sentinel captures the exit code of agents that exit.
   await sendLine(surface, `${opts.launchCommand}; echo __CMUX_EXIT__=$?`);
 
+  // Name the pane so it can be found and closed later (issue 1).
+  if (opts.tabTitle) await renameTab(surface, opts.tabTitle).catch(() => {});
+
   let lastScreen = "";
-  let lastChange = Date.now();
+  let lastChange = launchedAtMs;
   let sawActive = false; // guards against a stale `idle` from a previous run in this workspace
 
   try {
@@ -79,7 +91,9 @@ export async function runAgentStep(opts: StepOptions): Promise<StepResult> {
       }
 
       if (useLifecycle) {
-        const lifecycle = await readAgentLifecycle(opts.lifecycleAgent!, opts.workspace!);
+        // Pass launchedAtMs so cursor-agent sessions (which always report cwd=~/.cursor)
+        // can be matched by startedAt instead of cwd (issue 3 / lifecycle.ts fallback).
+        const lifecycle = await readAgentLifecycle(opts.lifecycleAgent!, opts.workspace!, launchedAtMs);
         if (lifecycle === "running" || lifecycle === "needsInput") {
           sawActive = true;
           lastChange = Date.now(); // active (incl. waiting on input) ≠ silent; hold the watchdog
