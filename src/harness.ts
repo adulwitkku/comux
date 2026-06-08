@@ -29,7 +29,7 @@ import {
 import { DEFAULT_WATCHDOG_MS } from "./agent-runner.ts";
 import { runWithChain } from "./scheduler.ts";
 import { checkpoint, hasChanges } from "./git.ts";
-import { readPlan, recentGitLog } from "./workspace.ts";
+import { readPlan, recentGitLog, readProjectDocs, nextChatFile } from "./workspace.ts";
 import {
   readSteps,
   tickStep,
@@ -40,7 +40,7 @@ import {
   REPORT_FILE,
   type Step,
 } from "./plan.ts";
-import { setStatus, log, openMarkdown, type SurfaceRef } from "./cmux.ts";
+import { setStatus, log, openMarkdown, closeSurface, type SurfaceRef } from "./cmux.ts";
 import { ui, c } from "./ui.ts";
 import type { Config, Capability } from "./config.ts";
 
@@ -56,6 +56,10 @@ export interface TurnDeps {
   /** Emit a line to the user. */
   say: (msg: string) => void;
   watchdogMs?: number;
+  /** Session-level surface of the currently open chat markdown viewer. */
+  getChatSurface?: () => SurfaceRef | null;
+  /** Update the session-level chat surface after opening a new chat file. */
+  setChatSurface?: (s: SurfaceRef | null) => void;
 }
 
 export async function runTurn(input: string, deps: TurnDeps): Promise<void> {
@@ -87,18 +91,26 @@ export async function runTurn(input: string, deps: TurnDeps): Promise<void> {
   }
 }
 
-/** The `chat` Capability (ADR-0019): the local model writes a markdown reply the Harness opens. */
+/** The `chat` Capability (ADR-0019): the local model writes a markdown reply the Harness opens.
+ *  Each reply goes to the next sequential file (chat1.md, chat2.md, …); the previous viewer
+ *  surface is closed first so only one chat tab is ever open at a time. */
 async function chatDispatch(
   input: string,
   ctx: { planMd: string; gitLog: string },
   deps: TurnDeps,
 ): Promise<void> {
   await setStatus("harness", "chat");
-  const md = await chatReply(input, ctx);
-  const file = join(deps.workspace, ".comux", "chat.md");
+  const { contextMd, readmeMd } = await readProjectDocs(deps.workspace);
+  const md = await chatReply(input, { ...ctx, contextMd, readmeMd });
+
+  const prev = deps.getChatSurface?.();
+  if (prev) await closeSurface(prev).catch(() => {});
+
+  const file = nextChatFile(deps.workspace);
   await writeFile(file, md.endsWith("\n") ? md : md + "\n");
   await setStatus("harness", "idle");
-  await openReport(file, deps);
+  const newSurface = await openReportTracked(file, deps);
+  deps.setChatSurface?.(newSurface);
 }
 
 /** Find an optional markdown artifact on disk (exact topic path, else newest prefix match).
@@ -133,11 +145,18 @@ function findArtifactPath(
 
 /** Open a markdown artifact in cmux's viewer, reporting success/failure to the user. */
 async function openReport(path: string, deps: TurnDeps): Promise<void> {
+  await openReportTracked(path, deps);
+}
+
+/** Like openReport but returns the surface ref so callers can track and close it later. */
+async function openReportTracked(path: string, deps: TurnDeps): Promise<SurfaceRef | null> {
   try {
-    await openMarkdown(path, { surface: deps.selfSurface });
+    const surface = await openMarkdown(path, { surface: deps.selfSurface });
     deps.say(ui.ok(`เปิด ${basename(path)} ใน markdown viewer`));
+    return surface;
   } catch (e) {
     deps.say(ui.warn(`เปิด ${basename(path)} ใน markdown viewer ไม่ได้: ${(e as Error).message}`));
+    return null;
   }
 }
 

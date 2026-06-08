@@ -113,11 +113,12 @@ export async function log(message: string): Promise<void> {
   await run(["log", "--source", "harness", message]);
 }
 
-/** Open a markdown file in cmux's viewer panel (live-reloads on disk changes). */
+/** Open a markdown file in cmux's viewer panel (live-reloads on disk changes).
+ *  Returns the surface ref of the viewer, or null if unavailable. */
 export async function openMarkdown(
   filePath: string,
   opts?: { surface?: SurfaceRef; noFocus?: boolean },
-): Promise<void> {
+): Promise<SurfaceRef | null> {
   const noFocus = opts?.noFocus ?? true;
   const focusVal = noFocus ? "false" : "true";
   const attempts: string[][] = [];
@@ -128,8 +129,15 @@ export async function openMarkdown(
 
   let lastErr = "";
   for (const args of attempts) {
-    const { code, stderr, stdout } = await run(args);
-    if (code === 0) return;
+    const { code, stderr, stdout } = await run(["--json", ...args]);
+    if (code === 0) {
+      try {
+        const parsed = JSON.parse(stdout) as { surface_ref?: SurfaceRef };
+        return parsed.surface_ref ?? null;
+      } catch {
+        return null;
+      }
+    }
     lastErr = stderr.trim() || stdout.trim();
   }
   throw new Error(`cmux markdown open failed: ${lastErr}`);

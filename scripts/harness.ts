@@ -13,11 +13,11 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { identifySelf, identifyContext } from "../src/cmux.ts";
+import { identifySelf, identifyContext, closeSurface, type SurfaceRef } from "../src/cmux.ts";
 import { runBroadcast, parseBroadcastArgs } from "../src/broadcast.ts";
 import { runUpdate } from "../src/update.ts";
 import { runWorkspaceCommand } from "../src/workspace-save.ts";
-import { ensureWorkspace, readPlan, currentBranch, listFiles } from "../src/workspace.ts";
+import { ensureWorkspace, readPlan, currentBranch, listFiles, clearChatFiles } from "../src/workspace.ts";
 import { runTurn } from "../src/harness.ts";
 import { startFeedWatcher } from "../src/feed.ts";
 import { Tui, type Item } from "../src/tui.ts";
@@ -137,6 +137,7 @@ function showAgents(): void {
 }
 
 const commands: Item[] = [
+  { name: "/new", desc: "clear chat history and start a new session" },
   { name: "/setup", desc: "detect agents & write default chains" },
   { name: "/agents", desc: "show capability chains" },
   { name: "/plan", desc: "show PLAN.md" },
@@ -162,6 +163,9 @@ function statusBar(): string {
 
 const tui = new Tui({ commands, status: statusBar, listFiles: () => listFiles(workspace) });
 const say = (m: string) => tui.print(m);
+
+// Session-level surface of the currently open chat markdown viewer (one at a time).
+let chatSurface: SurfaceRef | null = null;
 const confirmPlan = async (_summary: string) =>
   autoYes ? true : tui.confirm("อนุมัติแผนนี้แล้วรันทั้งหมดเลยไหม?");
 
@@ -206,7 +210,7 @@ loop: for (;;) {
     case "/quit":
       break loop;
     case "/help":
-      say(c.gray("  /setup  reset chains  ·  /agents  view chains  ·  /plan  PLAN.md  ·  /ws  ·  /exit"));
+      say(c.gray("  /new  new session  ·  /setup  reset chains  ·  /agents  view chains  ·  /plan  PLAN.md  ·  /ws  ·  /exit"));
       say(c.gray("  keys: ↑↓ choose command · ⏎ run · ⇥ complete · esc clear · ctrl+c exit"));
       continue;
     case "/setup": {
@@ -230,10 +234,23 @@ loop: for (;;) {
     case "/plan":
       say(c.gray(await readPlan(workspace)));
       continue;
+    case "/new": {
+      if (chatSurface) {
+        await closeSurface(chatSurface).catch(() => {});
+        chatSurface = null;
+      }
+      const n = await clearChatFiles(workspace);
+      say(c.green(`  ✓ new session${n > 0 ? ` — cleared ${n} chat file${n !== 1 ? "s" : ""}` : ""}`));
+      continue;
+    }
   }
 
   try {
-    await runTurn(line, { workspace, selfSurface, config, confirmPlan, chooseCapability, say });
+    await runTurn(line, {
+      workspace, selfSurface, config, confirmPlan, chooseCapability, say,
+      getChatSurface: () => chatSurface,
+      setChatSurface: (s) => { chatSurface = s; },
+    });
   } catch (e) {
     say(c.red(`  ⚠ error: ${(e as Error).message}`));
   }

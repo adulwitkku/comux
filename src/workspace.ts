@@ -5,7 +5,7 @@
 // in .comux/ which is auto-added to .gitignore.
 
 import { existsSync, readdirSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 async function git(args: string[], cwd: string): Promise<string> {
@@ -52,6 +52,34 @@ export async function readPlan(dir: string): Promise<string> {
 
 export async function recentGitLog(dir: string, n = 5): Promise<string> {
   return (await git(["log", "--oneline", `-${n}`], dir)).trim();
+}
+
+/** Path for the next sequential chat reply file (.comux/chat1.md, chat2.md, …). */
+export function nextChatFile(dir: string): string {
+  const comuxDir = join(dir, ".comux");
+  const existing = existsSync(comuxDir)
+    ? readdirSync(comuxDir).filter((f) => /^chat\d+\.md$/.test(f)).length
+    : 0;
+  return join(comuxDir, `chat${existing + 1}.md`);
+}
+
+/** Delete all .comux/chat*.md files. Returns the number of files removed. */
+export async function clearChatFiles(dir: string): Promise<number> {
+  const comuxDir = join(dir, ".comux");
+  if (!existsSync(comuxDir)) return 0;
+  const files = readdirSync(comuxDir).filter((f) => /^chat\d*\.md$/.test(f));
+  await Promise.all(files.map((f) => unlink(join(comuxDir, f)).catch(() => {})));
+  return files.length;
+}
+
+/** CONTEXT.md and README.md from the workspace root, for chatReply context. */
+export async function readProjectDocs(dir: string): Promise<{ contextMd: string | null; readmeMd: string | null }> {
+  const read = async (name: string): Promise<string | null> => {
+    const p = join(dir, name);
+    return existsSync(p) ? readFile(p, "utf8") : null;
+  };
+  const [contextMd, readmeMd] = await Promise.all([read("CONTEXT.md"), read("README.md")]);
+  return { contextMd, readmeMd };
 }
 
 /** Current git branch name (synchronous; cheap enough to call once per prompt). */

@@ -34,6 +34,10 @@ export interface IntentContext {
   planMd: string;
   /** Recent `git log` lines, for "what's been done" context. */
   gitLog: string;
+  /** CONTEXT.md from the workspace root (project glossary), if present. */
+  contextMd?: string | null;
+  /** README.md from the workspace root, if present. */
+  readmeMd?: string | null;
   model?: string;
   baseUrl?: string;
 }
@@ -213,6 +217,17 @@ export async function parseIntent(userInput: string, ctx: IntentContext): Promis
  * the workspace and opens in cmux's viewer.
  */
 export async function chatReply(userInput: string, ctx: IntentContext): Promise<string> {
+  const docSections: string[] = [];
+  if (ctx.contextMd?.trim()) {
+    docSections.push("Project glossary (CONTEXT.md):", ctx.contextMd.trim());
+  }
+  if (ctx.readmeMd?.trim()) {
+    docSections.push("", "Project README:", ctx.readmeMd.trim());
+  }
+  if (!docSections.length) {
+    docSections.push("(no project docs found)");
+  }
+
   const messages: ChatMessage[] = [
     {
       role: "system",
@@ -220,6 +235,8 @@ export async function chatReply(userInput: string, ctx: IntentContext): Promise<
         "You are the assistant of a local coding harness. Answer the user directly and concisely",
         "as GitHub-flavored Markdown (use headings, lists, tables, code blocks where they help).",
         "Reply in the user's language. Do not invent file changes — this is just conversation.",
+        "",
+        ...docSections,
         "",
         "Current PLAN.md:",
         ctx.planMd.trim() || "(empty)",
