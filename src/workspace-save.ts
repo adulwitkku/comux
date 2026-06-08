@@ -638,17 +638,20 @@ async function applySavedSurfaceTitles(workspaceRef: string, layout: LayoutNode)
   }
 }
 
-async function loadWorkspace(input: string, nameOverride?: string, focus = false): Promise<string> {
+async function loadWorkspace(input: string, nameOverride?: string): Promise<string> {
   await runCmd(["ping"]);
   const { path, data: saved } = readSaved(input);
   const title = nameOverride ?? saved.title;
+
+  const callerData = await runJSON<{ caller?: { surface_ref?: string } }>(["identify"]).catch(() => null);
+  const callerSurface = callerData?.caller?.surface_ref;
 
   const createArgs = [
     "workspace", "create",
     "--name", title,
     "--cwd", saved.cwd,
     "--layout", JSON.stringify(saved.layout),
-    "--focus", focus ? "true" : "false",
+    "--focus", "true",
   ];
   if (saved.description) createArgs.push("--description", saved.description);
 
@@ -657,6 +660,11 @@ async function loadWorkspace(input: string, nameOverride?: string, focus = false
   if (!workspaceRef) throw new Error("workspace create returned unexpected response");
 
   await applySavedSurfaceTitles(workspaceRef, saved.layout);
+
+  if (callerSurface) {
+    await runCmd(["close-surface", "--surface", callerSurface]);
+  }
+
   return `OK loaded ${title} as ${workspaceRef} from ${basename(path)}`;
 }
 
@@ -713,7 +721,7 @@ export async function runWorkspaceCommand(command: string, argv: string[]): Prom
     case "load": {
       const input = positional[0] ?? flags.name;
       if (!input) throw new Error("load requires a saved file or name");
-      const result = await loadWorkspace(input, flags.name, flags.focus);
+      const result = await loadWorkspace(input, flags.name);
       console.log(result);
       break;
     }
