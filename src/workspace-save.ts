@@ -643,8 +643,9 @@ async function loadWorkspace(input: string, nameOverride?: string): Promise<stri
   const { path, data: saved } = readSaved(input);
   const title = nameOverride ?? saved.title;
 
-  const callerData = await runJSON<{ caller?: { surface_ref?: string } }>(["identify"]).catch(() => null);
+  const callerData = await runJSON<{ caller?: { surface_ref?: string; workspace_ref?: string } }>(["identify"]).catch(() => null);
   const callerSurface = callerData?.caller?.surface_ref;
+  const callerWorkspace = callerData?.caller?.workspace_ref;
 
   const createArgs = [
     "workspace", "create",
@@ -662,7 +663,14 @@ async function loadWorkspace(input: string, nameOverride?: string): Promise<stri
   await applySavedSurfaceTitles(workspaceRef, saved.layout);
 
   if (callerSurface) {
-    await runCmd(["close-surface", "--surface", callerSurface]);
+    try {
+      await runCmd(["close-surface", "--surface", callerSurface]);
+    } catch {
+      // last surface in workspace — close the whole workspace instead
+      if (callerWorkspace) {
+        await runCmd(["workspace", "close", "--workspace", callerWorkspace]).catch(() => null);
+      }
+    }
   }
 
   return `OK loaded ${title} as ${workspaceRef} from ${basename(path)}`;
