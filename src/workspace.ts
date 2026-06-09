@@ -90,6 +90,13 @@ export function currentBranch(dir: string): string {
 
 const SKIP_DIRS = new Set([".git", "node_modules", ".DS_Store"]);
 
+/** Flat list of files in `.comux/` (agent artifacts, chat files, etc.) for `/open` completion. */
+export function listComuxFiles(dir: string): string[] {
+  const comuxDir = join(dir, ".comux");
+  if (!existsSync(comuxDir)) return [];
+  return readdirSync(comuxDir).filter((name) => !name.startsWith("."));
+}
+
 /** Relative file paths under `dir` (for `@` file mentions), skipping noise dirs. */
 export function listFiles(dir: string, max = 2000): string[] {
   const out: string[] = [];

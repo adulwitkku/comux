@@ -92,17 +92,21 @@ export interface TuiOptions {
   status: () => string;
   /** Returns relative file paths for `@` mentions. */
   listFiles?: () => string[];
+  /** Returns file names for `/open` and `/open-new` argument completion. */
+  listOpenFiles?: () => string[];
 }
 
 export class Tui {
   private readonly commands: Item[];
   private readonly status: () => string;
   private readonly listFiles?: () => string[];
+  private readonly listOpenFiles?: () => string[];
 
   constructor(opts: TuiOptions) {
     this.commands = opts.commands;
     this.status = opts.status;
     this.listFiles = opts.listFiles;
+    this.listOpenFiles = opts.listOpenFiles;
   }
 
   print(s: string): void {
@@ -128,14 +132,28 @@ export class Tui {
       let sel = 0;
       let first = true;
       let files: string[] | null = null;
+      let openFiles: string[] | null = null;
 
       process.stdout.write("\n" + this.status() + "\n");
 
       const commandMode = () => buf.startsWith("/") && !buf.includes(" ");
       const mentionMode = () => !commandMode() && activeMention(buf, cur) !== null;
+      const argMode = (): { cmd: string; query: string } | null => {
+        const m = /^(\/open(?:-new)?) (.*)$/.exec(buf);
+        return m ? { cmd: m[1]!, query: m[2]! } : null;
+      };
 
       const items = (): Item[] => {
         if (commandMode()) return this.commands.filter((cmd) => cmd.name.startsWith(buf));
+        const am = argMode();
+        if (am && this.listOpenFiles) {
+          if (!openFiles) openFiles = this.listOpenFiles();
+          const q = am.query.toLowerCase();
+          return openFiles
+            .filter((f) => f.toLowerCase().includes(q))
+            .slice(0, 200)
+            .map((f) => ({ name: f, desc: "" }));
+        }
         const m = activeMention(buf, cur);
         if (m && this.listFiles) {
           if (!files) files = this.listFiles();
@@ -187,6 +205,11 @@ export class Tui {
             const m = items()[sel];
             if (m) return finish(m.name);
           }
+          const am = argMode();
+          if (am && items().length) {
+            const selItem = items()[sel];
+            if (selItem) return finish(`${am.cmd} ${selItem.name}`);
+          }
           if (mentionMode() && items().length) {
             insertMention();
             return render();
@@ -197,6 +220,10 @@ export class Tui {
           if (commandMode()) {
             const m = items()[sel];
             if (m) { buf = m.name; cur = buf.length; }
+          } else if (argMode() && items().length) {
+            const am = argMode()!;
+            const selItem = items()[sel];
+            if (selItem) { buf = `${am.cmd} ${selItem.name}`; cur = buf.length; }
           } else if (mentionMode()) {
             insertMention();
           }

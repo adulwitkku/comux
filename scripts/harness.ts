@@ -11,19 +11,20 @@
 //
 // In the TUI:  type to chat · "/" commands · "@" file mentions · ⏎ run · ctrl+c exit
 
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { identifySelf, identifyContext, closeSurface, findResultSurface, type SurfaceRef } from "../src/cmux.ts";
+import { basename, join } from "node:path";
+import { identifySelf, identifyContext, closeSurface, findResultSurface, openMarkdown, openFile, renameTab, type SurfaceRef } from "../src/cmux.ts";
 import { runBroadcast, parseBroadcastArgs } from "../src/broadcast.ts";
 import { runUpdate } from "../src/update.ts";
 import { runWorkspaceCommand } from "../src/workspace-save.ts";
-import { ensureWorkspace, readPlan, currentBranch, listFiles, clearChatFiles } from "../src/workspace.ts";
+import { ensureWorkspace, readPlan, currentBranch, listFiles, clearChatFiles, listComuxFiles } from "../src/workspace.ts";
 import { runTurn } from "../src/harness.ts";
 import { startFeedWatcher } from "../src/feed.ts";
 import { Tui, type Item } from "../src/tui.ts";
 import { lastStats } from "../src/llm.ts";
 import { VERSION } from "../src/version.ts";
-import { c } from "../src/ui.ts";
+import { c, ui } from "../src/ui.ts";
 import {
   loadConfig,
   saveConfig,
@@ -139,6 +140,8 @@ function showAgents(): void {
 
 const commands: Item[] = [
   { name: "/new", desc: "clear chat history and start a new session" },
+  { name: "/open", desc: "open a file from .comux/ (replaces viewer tab)" },
+  { name: "/open-new", desc: "open a file from .comux/ in a new tab" },
   { name: "/setup", desc: "detect agents & write default chains" },
   { name: "/settings", desc: "edit agent chains per capability" },
   { name: "/agents", desc: "show capability chains" },
@@ -163,7 +166,12 @@ function statusBar(): string {
   return `${loc}  ${c.gray("·")}  ${ctx}  ${c.gray("·")}  ${m}  ${c.gray("·")}  ${tps}`;
 }
 
-const tui = new Tui({ commands, status: statusBar, listFiles: () => listFiles(workspace) });
+const tui = new Tui({
+  commands,
+  status: statusBar,
+  listFiles: () => listFiles(workspace),
+  listOpenFiles: () => listComuxFiles(workspace),
+});
 const say = (m: string) => tui.print(m);
 
 const confirmPlan = async (_summary: string) =>
@@ -198,6 +206,29 @@ if (firstSetup) {
 if (!process.stdin.isTTY) {
   say(c.red("  this TUI needs an interactive terminal (run it directly, not piped)."));
   process.exit(0);
+}
+
+const IMAGE_EXTS_OPEN = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
+
+async function openComuxFile(filename: string, tabName: string, closeExisting: boolean): Promise<void> {
+  const filePath = join(workspace, ".comux", filename);
+  if (!existsSync(filePath)) { say(c.red(`  ไม่พบ ${filename} ใน .comux/`)); return; }
+  if (closeExisting) {
+    const existing = await findResultSurface().catch(() => null);
+    if (existing) await closeSurface(existing).catch(() => {});
+  }
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  try {
+    const surface = IMAGE_EXTS_OPEN.has(ext)
+      ? await openFile(filePath, { surface: selfSurface })
+      : await openMarkdown(filePath, { surface: selfSurface });
+    if (surface) {
+      await renameTab(surface, tabName).catch(() => {});
+      say(ui.ok(`เปิด ${filename} ใน viewer`));
+    }
+  } catch (e) {
+    say(ui.warn(`เปิด ${filename} ไม่ได้: ${(e as Error).message}`));
+  }
 }
 
 loop: for (;;) {
@@ -250,6 +281,12 @@ loop: for (;;) {
     case "/agents":
       showAgents();
       continue;
+    case "/open":
+      say(c.gray("  พิมพ์ /open <ชื่อไฟล์> เพื่อเปิด — เว้นวรรคแล้วพิมพ์เพื่อ search"));
+      continue;
+    case "/open-new":
+      say(c.gray("  พิมพ์ /open-new <ชื่อไฟล์> เพื่อเปิด tab ใหม่ — เว้นวรรคแล้วพิมพ์เพื่อ search"));
+      continue;
     case "/ws":
       say(c.blue(`  ${workspace}`));
       continue;
@@ -263,6 +300,17 @@ loop: for (;;) {
       say(c.green(`  ✓ new session${n > 0 ? ` — cleared ${n} chat file${n !== 1 ? "s" : ""}` : ""}`));
       continue;
     }
+  }
+
+  if (line.startsWith("/open ")) {
+    await openComuxFile(line.slice("/open ".length).trim(), "comux-result", true);
+    continue;
+  }
+
+  if (line.startsWith("/open-new ")) {
+    const filename = line.slice("/open-new ".length).trim();
+    await openComuxFile(filename, basename(filename), false);
+    continue;
   }
 
   try {
