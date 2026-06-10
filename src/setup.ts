@@ -3,7 +3,7 @@
 // Re-running /setup rewrites the defaults; it does not merge over hand edits.
 
 import { AGENT_BINARIES } from "./agents.ts";
-import { DEFAULT_CHAINS, saveConfig, type Config } from "./config.ts";
+import { DEFAULT_BROADCAST_ROSTER, DEFAULT_CHAINS, loadConfig, saveConfig, type Config } from "./config.ts";
 
 export interface AgentStatus {
   name: string;
@@ -48,7 +48,12 @@ export async function runSetup(): Promise<SetupResult> {
   const agents = detectAgents();
   const installed = new Set(agents.filter((a) => a.installed).map((a) => a.name));
 
-  const config: Config = { chains: structuredClone(DEFAULT_CHAINS), bypass: true };
+  const existing = await loadConfig().catch(() => null);
+  const config: Config = {
+    chains: structuredClone(DEFAULT_CHAINS),
+    bypass: true,
+    broadcast: existing?.broadcast ?? { roster: structuredClone(DEFAULT_BROADCAST_ROSTER) },
+  };
 
   const missing = new Set<string>();
   for (const names of Object.values(config.chains)) {

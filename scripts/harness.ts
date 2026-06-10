@@ -6,7 +6,7 @@
 // new cmux pane, then git-checkpoints the result in the workspace.
 //
 //   comux                  # workspace = $COMUX_WORKSPACE or ./workspace (under the current dir)
-//   comux all [text]       # Broadcast: open every installed Agent's TUI; send text to all
+//   comux all [text]       # Broadcast: open the configured roster; send text to all
 //   comux --version | --help
 //
 // In the TUI:  type to chat · "/" commands · "@" file mentions · ⏎ run · ctrl+c exit
@@ -30,6 +30,7 @@ import {
   saveConfig,
   configExists,
   configPath,
+  DEFAULT_BROADCAST_ROSTER,
   type Config,
   type ChainKey,
   type Capability,
@@ -49,7 +50,7 @@ if (args.includes("--help") || args.includes("-h")) {
       "",
       "Usage:",
       "  comux               launch the TUI (workspace: $COMUX_WORKSPACE or current directory)",
-      "  comux all [text]    Broadcast: open every installed Agent's TUI; send text to all",
+      "  comux all [text]    Broadcast: open the configured roster; send text to all",
       "  comux update [--dev]  brew upgrade (or sync latest master with --dev)",
       "  comux save [name|ref] [-o file]  save current (or named) cmux workspace to disk",
       "  comux load <name> [--name title] [--focus]  restore a saved workspace",
@@ -80,9 +81,9 @@ if (args[0] === "update") {
   process.exit(0);
 }
 
-// `comux all [--cwd DIR] [text...]` — Broadcast mode (ADR-0014): open every installed Agent's
-// bare interactive TUI side-by-side and send the same text to all. This is a manual, unconfined
-// fan-out that bypasses the orchestrator entirely, so it is handled here before the TUI path.
+// `comux all [--cwd DIR] [text...]` — Broadcast mode (ADR-0014/0021): open each enabled roster
+// slot side-by-side (with its model) and send the same text to all. Manual, unconfined fan-out
+// that bypasses the orchestrator entirely, so it is handled here before the TUI path.
 if (args[0] === "all") {
   const rest = args.slice(1);
   const { cwd: cwdFlag } = parseBroadcastArgs(rest);
@@ -144,6 +145,7 @@ const commands: Item[] = [
   { name: "/open-new", desc: "open a file from .comux/ in a new tab" },
   { name: "/setup", desc: "detect agents & write default chains" },
   { name: "/settings", desc: "edit agent chains per capability" },
+  { name: "/broadcast", desc: "edit broadcast roster (comux all)" },
   { name: "/agents", desc: "show capability chains" },
   { name: "/plan", desc: "show PLAN.md" },
   { name: "/ws", desc: "show workspace path" },
@@ -241,7 +243,7 @@ loop: for (;;) {
     case "/quit":
       break loop;
     case "/help":
-      say(c.gray("  /new  new session  ·  /setup  reset chains  ·  /settings  edit chains  ·  /agents  view chains  ·  /plan  PLAN.md  ·  /ws  ·  /exit"));
+      say(c.gray("  /new  new session  ·  /setup  reset chains  ·  /settings  edit chains  ·  /broadcast  edit roster  ·  /agents  view chains  ·  /plan  PLAN.md  ·  /ws  ·  /exit"));
       say(c.gray("  keys: ↑↓ choose command · ⏎ run · ⇥ complete · esc clear · ctrl+c exit"));
       continue;
     case "/setup": {
@@ -281,6 +283,47 @@ loop: for (;;) {
     case "/agents":
       showAgents();
       continue;
+    case "/broadcast": {
+      const roster = config.broadcast?.roster ?? DEFAULT_BROADCAST_ROSTER;
+      say(c.gray("  Broadcast roster (comux all) — slot number toggles enabled, or enter to skip:"));
+      for (let i = 0; i < roster.length; i++) {
+        const s = roster[i]!;
+        const mark = s.enabled ? c.green("on ") : c.red("off");
+        const model = s.model ? c.gray(`  ${s.model}`) : "";
+        say(`  ${c.cyan(String(i + 1).padStart(2))}  ${mark}  ${s.displayName}${model}  ${c.gray(s.binary)}`);
+      }
+      let changed = false;
+      const toggleInput = (await tui.readLine())?.trim();
+      if (toggleInput && /^\d+$/.test(toggleInput)) {
+        const idx = Number(toggleInput) - 1;
+        if (idx >= 0 && idx < roster.length) {
+          roster[idx]!.enabled = !roster[idx]!.enabled;
+          changed = true;
+          say(c.gray(`  ${roster[idx]!.displayName}: ${roster[idx]!.enabled ? "on" : "off"}`));
+        }
+      }
+      say(c.gray("  Edit display name — slot number, or enter to skip:"));
+      const editSlot = (await tui.readLine())?.trim();
+      if (editSlot && /^\d+$/.test(editSlot)) {
+        const idx = Number(editSlot) - 1;
+        if (idx >= 0 && idx < roster.length) {
+          say(c.gray(`  New name for "${roster[idx]!.displayName}" (enter to keep): `));
+          const newName = (await tui.readLine())?.trim();
+          if (newName) {
+            roster[idx]!.displayName = newName;
+            changed = true;
+          }
+        }
+      }
+      if (changed) {
+        config.broadcast = { roster };
+        await saveConfig(config);
+        say(c.green("  ✓ saved broadcast roster"));
+      } else {
+        say(c.gray("  no changes"));
+      }
+      continue;
+    }
     case "/open":
       say(c.gray("  พิมพ์ /open <ชื่อไฟล์> เพื่อเปิด — เว้นวรรคแล้วพิมพ์เพื่อ search"));
       continue;

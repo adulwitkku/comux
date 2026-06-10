@@ -1,8 +1,8 @@
-// Broadcast mode (`comux all`) — a manual fan-out that opens every installed Agent as its bare
-// interactive TUI side-by-side and sends the same text to all at once, for the human to drive and
-// compare (ADR-0014). It deliberately bypasses the orchestration core — no Orchestrator, no
-// Capability/chain/Scheduler, no PLAN/Step/Acceptance check, no Checkpoint — and runs the Agents
-// UNCONFINED in a shared cwd (the sandbox of ADR-0005 does not apply here).
+// Broadcast mode (`comux all`) — a manual fan-out that opens each enabled Broadcast-roster slot
+// as its bare interactive TUI side-by-side (with that slot's model) and sends the same text to
+// all at once, for the human to drive and compare (ADR-0014, ADR-0021). It deliberately bypasses
+// the orchestration core — no Orchestrator, no Capability/chain/Scheduler, no PLAN/Step/
+// Acceptance check, no Checkpoint — and runs the Agents UNCONFINED in a shared cwd.
 //
 // This is the opposite of a Dispatch: unrouted, to everyone, no sentinel/watchdog (a human
 // watches). The orchestrated flow never imports this module.
@@ -10,8 +10,8 @@
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { REGISTRY, type Agent } from "./agents.ts";
-import { detectAgents } from "./setup.ts";
+import { REGISTRY, type Agent, type PasteMode } from "./agents.ts";
+import { loadConfig, rosterHash, type BroadcastSlot } from "./config.ts";
 import { configDir } from "./config.ts";
 import {
   newSplit,
@@ -29,6 +29,80 @@ function shq(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+/** Registry key for a Broadcast slot's CLI binary (paste profile lookup). */
+const BINARY_TO_REGISTRY: Record<string, string> = {
+  pi: "pi",
+  claude: "claude",
+  codex: "codex",
+  "cursor-agent": "cursor",
+  agent: "agent",
+  agy: "agy",
+  opencode: "opencode",
+};
+
+/** A resolved roster slot ready to open or send into. */
+export interface BroadcastTarget {
+  id: string;
+  displayName: string;
+  openCommand: string;
+  pasteMode: PasteMode;
+  submitKey: string;
+  newlineKey: string;
+}
+
+/** Build the bare interactive launch command for a roster slot. */
+export function buildOpenCommand(slot: BroadcastSlot): string {
+  const parts = [slot.binary];
+  if (slot.model) {
+    const flag = slot.binary === "codex" || slot.binary === "opencode" ? "-m" : "--model";
+    parts.push(flag, shq(slot.model));
+  }
+  if (slot.openArgs?.length) parts.push(...slot.openArgs);
+  return parts.join(" ");
+}
+
+function sendProfile(binary: string): Pick<Agent, "pasteMode" | "submitKey" | "newlineKey"> {
+  const reg = BINARY_TO_REGISTRY[binary];
+  const agent = reg ? REGISTRY[reg] : undefined;
+  return {
+    pasteMode: agent?.pasteMode ?? "bracketed",
+    submitKey: agent?.submitKey ?? "enter",
+    newlineKey: agent?.newlineKey ?? "shift+enter",
+  };
+}
+
+/** Turn enabled roster slots into launch targets (does not check PATH). */
+export function resolveBroadcastTargets(roster: BroadcastSlot[]): BroadcastTarget[] {
+  return roster
+    .filter((s) => s.enabled)
+    .map((slot) => {
+      const profile = sendProfile(slot.binary);
+      return {
+        id: slot.id,
+        displayName: slot.displayName,
+        openCommand: buildOpenCommand(slot),
+        ...profile,
+      };
+    });
+}
+
+/** Enabled roster slots whose CLI binary is on PATH. */
+export function activeBroadcastTargets(
+  roster: BroadcastSlot[],
+  log?: (msg: string) => void,
+): BroadcastTarget[] {
+  const out: BroadcastTarget[] = [];
+  for (const t of resolveBroadcastTargets(roster)) {
+    const slot = roster.find((s) => s.id === t.id);
+    if (!slot || !Bun.which(slot.binary)) {
+      log?.(`skipped: ${t.displayName} (${slot?.binary ?? "?"} not installed)`);
+      continue;
+    }
+    out.push(t);
+  }
+  return out;
+}
+
 // --------------------------------------------------------------------------- //
 // state file (per cmux workspace)                                             //
 // --------------------------------------------------------------------------- //
@@ -38,8 +112,10 @@ export interface BroadcastState {
   workspace: string;
   /** Directory the Agents were opened in. */
   cwd: string;
-  /** Agent name → the surface its TUI runs in. */
-  agents: Record<string, SurfaceRef>;
+  /** Fingerprint of the roster when the grid was built — rebuild when it changes. */
+  rosterHash: string;
+  /** Slot id → the surface its TUI runs in. */
+  slots: Record<string, SurfaceRef>;
 }
 
 function stateDir(): string {
@@ -63,7 +139,10 @@ export async function loadState(workspace: string): Promise<BroadcastState | nul
   const path = stateFile(workspace);
   if (!existsSync(path)) return null;
   try {
-    return JSON.parse(await readFile(path, "utf8")) as BroadcastState;
+    const raw = JSON.parse(await readFile(path, "utf8")) as BroadcastState & { agents?: Record<string, SurfaceRef> };
+    // Migrate pre-ADR-0021 state that keyed by agent name.
+    if (!raw.slots && raw.agents) raw.slots = raw.agents;
+    return raw;
   } catch {
     return null;
   }
@@ -116,20 +195,19 @@ async function buildGrid(origin: SurfaceRef, n: number): Promise<SurfaceRef[]> {
   return surfaces;
 }
 
-/** Open each Agent's bare interactive TUI in its own pane; return the agent→surface map. */
+/** Open each slot's bare interactive TUI in its own pane; return the slot-id→surface map. */
 async function openGrid(
   origin: SurfaceRef,
-  agents: Agent[],
+  targets: BroadcastTarget[],
   cwd: string,
 ): Promise<Record<string, SurfaceRef>> {
-  const surfaces = await buildGrid(origin, agents.length);
+  const surfaces = await buildGrid(origin, targets.length);
   const map: Record<string, SurfaceRef> = {};
-  for (let i = 0; i < agents.length; i++) {
-    const a = agents[i]!;
+  for (let i = 0; i < targets.length; i++) {
+    const t = targets[i]!;
     const surface = surfaces[i]!;
-    // Bare interactive launch in the shared cwd — no task, no sentinel, no confine (ADR-0014).
-    await sendLine(surface, `cd ${shq(cwd)} && ${a.openCommand}`);
-    map[a.name] = surface;
+    await sendLine(surface, `cd ${shq(cwd)} && ${t.openCommand}`);
+    map[t.id] = surface;
   }
   return map;
 }
@@ -137,6 +215,13 @@ async function openGrid(
 // --------------------------------------------------------------------------- //
 // send dispatch (per-Agent paste mode, ported from ai.py)                     //
 // --------------------------------------------------------------------------- //
+
+/** Paste/submit profile for dispatching text into a running TUI. */
+export interface SendProfile {
+  pasteMode: PasteMode;
+  submitKey: string;
+  newlineKey: string;
+}
 
 /** The cmux operations the send dispatcher needs — injectable so it can be tested offline. */
 export interface SendOps {
@@ -151,26 +236,26 @@ const realOps: SendOps = { send, sendKey, setBuffer, pasteBuffer };
 /** Deliver `text` into one Agent's TUI per its paste mode, then submit once. */
 export async function dispatchSend(
   ops: SendOps,
-  agent: Agent,
+  profile: SendProfile,
   surface: SurfaceRef,
   text: string,
 ): Promise<void> {
-  if (agent.pasteMode === "buffer") {
+  if (profile.pasteMode === "buffer") {
     const buf = `comux-${process.pid}-${Date.now()}`;
     await ops.setBuffer(buf, text);
     await ops.pasteBuffer(buf, surface);
-  } else if (agent.pasteMode === "typed") {
+  } else if (profile.pasteMode === "typed") {
     const lines = text.split("\n");
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]!;
       if (line) await ops.send(surface, line);
-      if (i < lines.length - 1) await ops.sendKey(surface, agent.newlineKey);
+      if (i < lines.length - 1) await ops.sendKey(surface, profile.newlineKey);
     }
   } else {
     // bracketed: wrap in OSC 200/201 so the TUI treats it as a paste, not keystrokes.
     await ops.send(surface, `\x1b[200~${text}\x1b[201~`);
   }
-  await ops.sendKey(surface, agent.submitKey);
+  await ops.sendKey(surface, profile.submitKey);
 }
 
 // --------------------------------------------------------------------------- //
@@ -199,14 +284,6 @@ export function parseBroadcastArgs(argv: string[]): BroadcastArgs {
   return { text: rest.join(" ").trim(), cwd };
 }
 
-/** Installed Agents in registry order (the set Broadcast fans out to). */
-export function installedAgents(): Agent[] {
-  return detectAgents()
-    .filter((a) => a.installed)
-    .map((a) => REGISTRY[a.name])
-    .filter((a): a is Agent => a != null);
-}
-
 /** Is the saved grid still live? Probe one stored surface; a read failure means it is stale. */
 async function gridIsLive(map: Record<string, SurfaceRef>): Promise<boolean> {
   const first = Object.values(map)[0];
@@ -230,37 +307,39 @@ export interface BroadcastContext {
 export async function runBroadcast(argv: string[], ctx: BroadcastContext): Promise<void> {
   const log = ctx.log ?? ((m: string) => console.log(m));
   const { text } = parseBroadcastArgs(argv);
+  const config = await loadConfig();
+  const hash = rosterHash(config.broadcast.roster);
 
-  const agents = installedAgents();
-  if (agents.length === 0) {
-    log("no agents installed — run /setup or install an Agent CLI first.");
+  const targets = activeBroadcastTargets(config.broadcast.roster, log);
+  if (targets.length === 0) {
+    log("no broadcast slots available — enable slots in /broadcast or install Agent CLIs.");
     return;
   }
 
   const saved = await loadState(ctx.workspace);
-  let map = saved?.agents ?? null;
-  if (!map || !(await gridIsLive(map))) {
-    log(`opening ${agents.length} agent panes in ${ctx.cwd} …`);
-    map = await openGrid(ctx.origin, agents, ctx.cwd);
-    await saveState({ workspace: ctx.workspace, cwd: ctx.cwd, agents: map });
-    log(`grid: ${agents.map((a) => a.name).join(" · ")}`);
+  let map = saved?.slots ?? null;
+  if (!map || saved?.rosterHash !== hash || !(await gridIsLive(map))) {
+    log(`opening ${targets.length} agent panes in ${ctx.cwd} …`);
+    map = await openGrid(ctx.origin, targets, ctx.cwd);
+    await saveState({ workspace: ctx.workspace, cwd: ctx.cwd, rosterHash: hash, slots: map });
+    log(`grid: ${targets.map((t) => t.displayName).join(" · ")}`);
   } else {
     log(`reusing existing grid (${Object.keys(map).length} panes).`);
   }
 
   if (!text) return;
 
-  for (const a of agents) {
-    const surface = map[a.name];
+  for (const t of targets) {
+    const surface = map[t.id];
     if (!surface) {
-      log(`warn: skipping ${a.name} (no pane)`);
+      log(`warn: skipping ${t.displayName} (no pane)`);
       continue;
     }
     try {
-      await dispatchSend(realOps, a, surface, text);
-      log(`sent → ${a.name}`);
+      await dispatchSend(realOps, t, surface, text);
+      log(`sent → ${t.displayName}`);
     } catch (e) {
-      log(`warn: ${a.name} send failed (${(e as Error).message}) — skipping`);
+      log(`warn: ${t.displayName} send failed (${(e as Error).message}) — skipping`);
     }
   }
 }

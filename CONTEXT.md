@@ -112,15 +112,32 @@ A temporary "unavailable" mark on an Agent that hit a quota/rate-limit, with a r
 after which it becomes selectable again.
 
 **Broadcast**:
-A manual fan-out mode (`comux all`) that opens every **installed** registry Agent as its bare
-interactive TUI side-by-side and sends the same text to all of them at once, for the human to
-drive and compare. It deliberately bypasses the orchestration core — no Orchestrator intent
-parse, no Capability/chain/Scheduler, no PLAN/Step/Acceptance check, no Checkpoint — and runs the
-Agents **unconfined in a shared cwd** (the sandbox of ADR-0005 does not apply). It is an
-advisory/compare playground, not autonomous orchestration; collisions between Agents writing the
-same files are the human's responsibility.
+A manual fan-out mode (`comux all`) that opens each **enabled** slot in the user's **Broadcast
+roster** as its bare interactive TUI side-by-side (with that slot's chosen model) and sends the
+same text to all of them at once, for the human to drive and compare. Slots whose CLI binary is
+not installed are skipped with a warning; the grid sizes to however many panes actually opened.
+It deliberately bypasses the orchestration core — no Orchestrator intent parse, no Capability/
+chain/Scheduler, no PLAN/Step/Acceptance check, no Checkpoint — and runs the Agents **unconfined
+in a shared cwd** (the sandbox of ADR-0005 does not apply). It is an advisory/compare playground,
+not autonomous orchestration; collisions between Agents writing the same files are the human's
+responsibility. The roster is edited via `/broadcast` in the TUI; when the roster changes, the
+next `comux all` rebuilds the grid automatically.
 _Avoid_: Dispatch (a Dispatch is a single routed task through a chain; a Broadcast is the
 opposite — unrouted, to everyone at once)
+
+**Broadcast roster**:
+The ordered list of Broadcast slots kept in the user's config (`broadcast.roster` in
+`~/.config/comux/config.json`). Each slot names one bare Agent launch — a display label, the CLI
+binary, an optional model, and an `enabled` flag — not a registry Agent name. The default roster
+has ten slots (pi, claude, codex, cursor-agent, agy, and five opencode variants on different
+models). `/broadcast` toggles slots on/off, reorders them, and edits display names; capability
+chains are unaffected.
+
+**Broadcast slot**:
+One entry in the Broadcast roster: a human-chosen **display name**, a CLI **binary**, an optional
+**model** (passed as that CLI's `--model` / `-m` flag on launch), and **`enabled`**. Multiple
+slots may share the same binary (e.g. five opencode slots on different models); the slot's
+internal id keys the per-workspace state file (slot → cmux surface), not the binary name alone.
 
 **Grilling**:
 The interaction model in which a running Agent surfaces its decisions as it works — a
