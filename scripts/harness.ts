@@ -6,7 +6,7 @@
 // new cmux pane, then git-checkpoints the result in the workspace.
 //
 //   comux                  # workspace = $COMUX_WORKSPACE or ./workspace (under the current dir)
-//   comux all [text]       # Broadcast: open the configured roster; send text to all
+//   comux all [--new] [text]  # Broadcast: open the configured roster (equal grid); send text to all
 //   comux --version | --help
 //
 // In the TUI:  type to chat · "/" commands · "@" file mentions · ⏎ run · ctrl+c exit
@@ -50,7 +50,7 @@ if (args.includes("--help") || args.includes("-h")) {
       "",
       "Usage:",
       "  comux               launch the TUI (workspace: $COMUX_WORKSPACE or current directory)",
-      "  comux all [text]    Broadcast: open the configured roster; send text to all",
+      "  comux all [--new] [text]  Broadcast: open the configured roster (equal grid); send text to all",
       "  comux update [--dev]  brew upgrade (or sync latest master with --dev)",
       "  comux save [name|ref] [-o file]  save current (or named) cmux workspace to disk",
       "  comux load <name> [--name title] [--focus]  restore a saved workspace",
@@ -81,9 +81,10 @@ if (args[0] === "update") {
   process.exit(0);
 }
 
-// `comux all [--cwd DIR] [text...]` — Broadcast mode (ADR-0014/0021): open each enabled roster
-// slot side-by-side (with its model) and send the same text to all. Manual, unconfined fan-out
-// that bypasses the orchestrator entirely, so it is handled here before the TUI path.
+// `comux all [--cwd DIR] [--new] [text...]` — Broadcast mode (ADR-0014/0021): open each enabled
+// roster slot in an equal-sized grid (with its model) and send the same text to all. Manual,
+// unconfined fan-out that bypasses the orchestrator entirely, so it is handled here before the TUI
+// path. `--new` rebuilds the grid instead of reusing a live one.
 if (args[0] === "all") {
   const rest = args.slice(1);
   const { cwd: cwdFlag } = parseBroadcastArgs(rest);

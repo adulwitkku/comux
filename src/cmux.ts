@@ -2,7 +2,19 @@
 // real CLI in this environment before being written (see ROADMAP M1).
 
 export type SurfaceRef = `surface:${number}`;
+export type PaneRef = `pane:${number}`;
 export type Direction = "left" | "right" | "up" | "down";
+
+/** A pane's geometry + the surfaces it hosts, as reported by `list-panes`. */
+export interface PaneInfo {
+  ref: PaneRef;
+  index: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  surfaceRefs: SurfaceRef[];
+}
 
 async function run(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
   const proc = Bun.spawn(["cmux", ...args], { stdout: "pipe", stderr: "pipe" });
@@ -84,6 +96,48 @@ export async function readScreen(surface: SurfaceRef, lines = 50): Promise<strin
 
 export async function closeSurface(surface: SurfaceRef): Promise<void> {
   await run(["close-surface", "--surface", surface]);
+}
+
+// --- Pane geometry + resize (Broadcast Equal grid, ADR-0014) ---
+// cmux only ever splits a pane in half, so a 3+ pane row comes out 1/2, 1/4, 1/4. We read the
+// resulting pixel frames and nudge the internal boundaries with `resize-pane` (tmux-compat;
+// --amount is in pixels) until every pane is the same size.
+
+/** List the panes of a workspace with their pixel frames and hosted surfaces. */
+export async function listPanes(workspace?: string): Promise<PaneInfo[]> {
+  const args = ["list-panes"];
+  if (workspace) args.push("--workspace", workspace);
+  const r = await runJSON<{
+    panes?: Array<{
+      ref: PaneRef;
+      index: number;
+      pixel_frame: { x: number; y: number; width: number; height: number };
+      surface_refs?: SurfaceRef[];
+    }>;
+  }>(args);
+  return (r.panes ?? []).map((p) => ({
+    ref: p.ref,
+    index: p.index,
+    x: p.pixel_frame.x,
+    y: p.pixel_frame.y,
+    width: p.pixel_frame.width,
+    height: p.pixel_frame.height,
+    surfaceRefs: p.surface_refs ?? [],
+  }));
+}
+
+/** Move one of a pane's borders by `amount` pixels (tmux-compatible resize). */
+export async function resizePane(
+  pane: PaneRef,
+  dir: "L" | "R" | "U" | "D",
+  amount: number,
+  workspace?: string,
+): Promise<void> {
+  if (amount <= 0) return;
+  const args = ["resize-pane", "--pane", pane, `-${dir}`, "--amount", String(Math.round(amount))];
+  if (workspace) args.push("--workspace", workspace);
+  const { code, stderr } = await run(args);
+  if (code !== 0) throw new Error(`cmux resize-pane failed: ${stderr.trim()}`);
 }
 
 // --- Buffer paste (Broadcast, ADR-0014) ---

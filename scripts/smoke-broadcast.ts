@@ -14,7 +14,6 @@ const { REGISTRY } = await import("../src/agents.ts");
 const { DEFAULT_BROADCAST_ROSTER, rosterHash } = await import("../src/config.ts");
 const {
   gridDims,
-  cellsPerColumn,
   parseBroadcastArgs,
   dispatchSend,
   saveState,
@@ -38,8 +37,8 @@ try {
     return a;
   };
 
-  // --- Step 1: default roster has ten enabled slots with models ---
-  ok("default roster has 10 slots", DEFAULT_BROADCAST_ROSTER.length === 10);
+  // --- Step 1: default roster has nine enabled slots with models (the Equal-grid cap) ---
+  ok("default roster has 9 slots", DEFAULT_BROADCAST_ROSTER.length === 9);
   ok("default roster slots are enabled", DEFAULT_BROADCAST_ROSTER.every((s) => s.enabled));
   ok("agy model is quoted-safe", buildOpenCommand(DEFAULT_BROADCAST_ROSTER.find((s) => s.binary === "agy")!).includes("'Gemini 3.5 Flash (Medium)'"));
 
@@ -51,7 +50,7 @@ try {
 
   // --- Step 3: resolve targets picks paste profiles from registry ---
   const targets = resolveBroadcastTargets(DEFAULT_BROADCAST_ROSTER);
-  ok("resolve ten enabled targets", targets.length === 10);
+  ok("resolve nine enabled targets", targets.length === 9);
   const piT = targets.find((t) => t.id === "pi-gemma4-12b-mlx")!;
   ok("pi types its input", piT.pasteMode === "typed");
   const curT = targets.find((t) => t.id === "cursor-composer-2.5")!;
@@ -72,12 +71,23 @@ try {
   toggled[0]!.enabled = false;
   ok("rosterHash changes on toggle", rosterHash(toggled) !== hashA);
 
-  // --- Step 6: grid math ---
+  // --- Step 6: grid math — Equal-grid dims tile every count 1–9 with at most one pad cell ---
   const dims = (n: number) => `${gridDims(n).cols}x${gridDims(n).rows}`;
-  ok("gridDims is roughly square", dims(1) === "1x1" && dims(2) === "2x1" && dims(3) === "2x2" && dims(4) === "2x2" && dims(5) === "3x2" && dims(6) === "3x2" && dims(10) === "4x3", [1, 2, 3, 4, 5, 6, 10].map(dims).join(","));
+  const expected: Record<number, string> = {
+    1: "1x1", 2: "2x1", 3: "3x1", 4: "2x2", 5: "3x2", 6: "3x2", 7: "4x2", 8: "4x2", 9: "3x3",
+  };
   ok(
-    "cellsPerColumn sums to n with extras left-loaded",
-    cellsPerColumn(5, 3).join() === "2,2,1" && cellsPerColumn(6, 3).join() === "2,2,2" && cellsPerColumn(3, 2).join() === "2,1",
+    "gridDims tiles 1–9 as expected (landscape, ≤1 pad)",
+    Object.entries(expected).every(([n, want]) => dims(Number(n)) === want),
+    Object.keys(expected).map((n) => `${n}:${dims(Number(n))}`).join(" "),
+  );
+  ok(
+    "gridDims pads only when needed (pad ≤ 1, never drops a cell)",
+    [1, 2, 3, 4, 5, 6, 7, 8, 9].every((n) => {
+      const { cols, rows } = gridDims(n);
+      const pad = cols * rows - n;
+      return pad >= 0 && pad <= 1;
+    }),
   );
 
   // --- Step 7: state-file roundtrip under temp XDG, keyed by workspace ---
@@ -93,10 +103,12 @@ try {
   ok("loadState roundtrips slot→surface map", st?.slots["claude-sonnet"] === "surface:9" && st?.cwd === "/tmp/proj" && st?.rosterHash === hashA);
 
   // --- Step 8: argv parsing (--cwd extracted, rest is the broadcast text) ---
-  ok("parse open-only", parseBroadcastArgs([]).text === "" && parseBroadcastArgs([]).cwd === null);
+  ok("parse open-only", parseBroadcastArgs([]).text === "" && parseBroadcastArgs([]).cwd === null && parseBroadcastArgs([]).fresh === false);
   ok("parse text", parseBroadcastArgs(["hi", "there"]).text === "hi there");
   const p = parseBroadcastArgs(["--cwd", "/x", "hello"]);
   ok("parse --cwd before text", p.cwd === "/x" && p.text === "hello");
+  const fp = parseBroadcastArgs(["--new", "hello", "world"]);
+  ok("parse --new flag (not part of text)", fp.fresh === true && fp.text === "hello world");
 
   // --- Step 9: paste-mode dispatch picks the right cmux calls (recording mock) ---
   function recorder() {

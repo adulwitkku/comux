@@ -113,30 +113,40 @@ after which it becomes selectable again.
 
 **Broadcast**:
 A manual fan-out mode (`comux all`) that opens each **enabled** slot in the user's **Broadcast
-roster** as its bare interactive TUI side-by-side (with that slot's chosen model) and sends the
-same text to all of them at once, for the human to drive and compare. Slots whose CLI binary is
-not installed are skipped with a warning; the grid sizes to however many panes actually opened.
-It deliberately bypasses the orchestration core — no Orchestrator intent parse, no Capability/
-chain/Scheduler, no PLAN/Step/Acceptance check, no Checkpoint — and runs the Agents **unconfined
-in a shared cwd** (the sandbox of ADR-0005 does not apply). It is an advisory/compare playground,
-not autonomous orchestration; collisions between Agents writing the same files are the human's
-responsibility. The roster is edited via `/broadcast` in the TUI; when the roster changes, the
-next `comux all` rebuilds the grid automatically.
+roster** as its bare interactive TUI in its own pane (with that slot's chosen model), split off
+below the caller's terminal in the **same** workspace, and sends the same text to all of them at
+once, for the human to drive and compare. Slots whose CLI binary is not installed are skipped with
+a warning; the grid sizes to however many panes actually opened (1–9), laid out as an **Equal
+grid** so every agent pane is the same size. It deliberately bypasses the orchestration core — no
+Orchestrator intent parse, no Capability/chain/Scheduler, no PLAN/Step/Acceptance check, no
+Checkpoint — and runs the Agents **unconfined in a shared cwd** (the sandbox of ADR-0005 does not
+apply). It is an advisory/compare playground, not autonomous orchestration; collisions between
+Agents writing the same files are the human's responsibility. The roster is edited via `/broadcast`
+in the TUI; when the roster changes, the next `comux all` rebuilds the grid automatically. `comux
+all` **reuses** a live grid; `comux all --new` forces a fresh one.
 _Avoid_: Dispatch (a Dispatch is a single routed task through a chain; a Broadcast is the
 opposite — unrouted, to everyone at once)
+
+**Equal grid**:
+The Broadcast layout rule: `n` agent panes (1–9) are arranged in a `cols × rows` grid chosen to
+minimise `|cols − rows| + 2·(cols·rows − n)` (landscape-biased on ties), then resized so **every
+agent pane is the same size**. Because cmux only splits a pane in half, the grid is built with
+`new-split` and then equalised with `resize-pane` (boundaries nudged outermost-in by computed pixel
+amounts). Counts that don't tile evenly (primes like 5, 7) pad the grid with a trailing empty pane
+rather than letting any pane differ in size.
 
 **Broadcast roster**:
 The ordered list of Broadcast slots kept in the user's config (`broadcast.roster` in
 `~/.config/comux/config.json`). Each slot names one bare Agent launch — a display label, the CLI
 binary, an optional model, and an `enabled` flag — not a registry Agent name. The default roster
-has ten slots (pi, claude, codex, cursor-agent, agy, and five opencode variants on different
-models). `/broadcast` toggles slots on/off, reorders them, and edits display names; capability
-chains are unaffected.
+has nine slots (pi, claude, codex, cursor-agent, agy, and four opencode variants on different
+models), the cap for one Equal grid. `/broadcast` toggles slots on/off, reorders them, and edits
+display names; capability chains are unaffected.
 
 **Broadcast slot**:
 One entry in the Broadcast roster: a human-chosen **display name**, a CLI **binary**, an optional
 **model** (passed as that CLI's `--model` / `-m` flag on launch), and **`enabled`**. Multiple
-slots may share the same binary (e.g. five opencode slots on different models); the slot's
+slots may share the same binary (e.g. four opencode slots on different models); the slot's
 internal id keys the per-workspace state file (slot → cmux surface), not the binary name alone.
 
 **Grilling**:

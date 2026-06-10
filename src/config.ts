@@ -61,7 +61,8 @@ export const DEFAULT_CHAINS: Record<ChainKey, string[]> = {
   chat: [],
 };
 
-/** Default Broadcast roster: ten slots with per-slot models (`comux all`, ADR-0021). */
+/** Default Broadcast roster: nine slots with per-slot models — the cap for one Equal grid
+ *  (`comux all`, ADR-0021). */
 export const DEFAULT_BROADCAST_ROSTER: BroadcastSlot[] = [
   { id: "pi-gemma4-12b-mlx", displayName: "Pi Gemma", binary: "pi", model: "gemma4:12b-mlx", enabled: true },
   { id: "claude-sonnet", displayName: "Claude Sonnet", binary: "claude", model: "sonnet", enabled: true },
@@ -72,7 +73,6 @@ export const DEFAULT_BROADCAST_ROSTER: BroadcastSlot[] = [
   { id: "opencode-deepseek-v4", displayName: "OC DeepSeek", binary: "opencode", model: "opencode/deepseek-v4-flash-free", enabled: true },
   { id: "opencode-mimo-v2.5", displayName: "OC MiMo", binary: "opencode", model: "opencode/mimo-v2.5-free", enabled: true },
   { id: "opencode-nemotron-3", displayName: "OC Nemotron", binary: "opencode", model: "opencode/nemotron-3-ultra-free", enabled: true },
-  { id: "opencode-north-mini", displayName: "OC North Mini", binary: "opencode", model: "opencode/north-mini-code-free", enabled: true },
 ];
 
 /** Fingerprint of the enabled roster — stored in broadcast state to detect config changes. */

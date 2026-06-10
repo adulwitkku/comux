@@ -21,7 +21,11 @@ import {
   setBuffer,
   pasteBuffer,
   readScreen,
+  listPanes,
+  resizePane,
+  closeSurface,
   type SurfaceRef,
+  type PaneRef,
 } from "./cmux.ts";
 
 /** Single-quote a string for safe use inside a shell command. */
@@ -149,66 +153,145 @@ export async function loadState(workspace: string): Promise<BroadcastState | nul
 }
 
 // --------------------------------------------------------------------------- //
-// grid layout (rough grid via repeated newSplit — no rpc/workspace.create)    //
+// Equal grid (uniform cols × rows via newSplit, then equalised with resize)   //
 // --------------------------------------------------------------------------- //
 
-/** Columns × rows for `n` panes: roughly square, columns-first. */
+/**
+ * Columns × rows for `n` panes (1–9), chosen so every pane ends up the same size.
+ * We minimise `|cols − rows| + 2·pad` (pad = cols·rows − n) and, on a tie, prefer fewer pad
+ * cells and then a wider (landscape) grid. Counts that don't tile evenly (5, 7) keep one trailing
+ * cell empty rather than letting any pane differ in size.
+ */
 export function gridDims(n: number): { cols: number; rows: number } {
   if (n <= 0) return { cols: 0, rows: 0 };
-  const cols = Math.ceil(Math.sqrt(n));
-  const rows = Math.ceil(n / cols);
-  return { cols, rows };
+  let best = { cols: n, rows: 1, cost: Infinity, pad: Infinity };
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    const pad = cols * rows - n;
+    const cost = Math.abs(cols - rows) + 2 * pad;
+    if (
+      cost < best.cost ||
+      (cost === best.cost && pad < best.pad) ||
+      (cost === best.cost && pad === best.pad && cols > best.cols)
+    ) {
+      best = { cols, rows, cost, pad };
+    }
+  }
+  return { cols: best.cols, rows: best.rows };
 }
 
-/** Cells per column for `n` panes across `cols` columns (extras go to the leftmost columns). */
-export function cellsPerColumn(n: number, cols: number): number[] {
-  const base = Math.floor(n / cols);
-  const extra = n % cols;
-  return Array.from({ length: cols }, (_, c) => base + (c < extra ? 1 : 0));
+/** A built grid: the panes in column-major fill order, grouped by column for equalising. */
+interface BuiltGrid {
+  /** All cell surfaces in fill order (col 0 top→bottom, then col 1, …); length = cols·rows. */
+  cells: SurfaceRef[];
+  /** Surfaces per column, top→bottom — used to equalise row heights within each column. */
+  columns: SurfaceRef[][];
 }
 
 /**
- * Build `n` agent panes as a rough grid below the caller's terminal, using only `newSplit`.
- * The origin terminal is kept (it stays the controlling pane); the grid is split off beneath it.
- * Returns the new surfaces in fill order (column 0 top→bottom, then column 1, …).
+ * Build a uniform `cols × rows` grid below the caller's terminal using only `newSplit`. The origin
+ * terminal is kept (it stays the controlling pane); the grid is split off beneath it. Every column
+ * gets the full `rows` cells (trailing cells beyond `n` are padding), so the layout is rectangular
+ * and can be equalised. Returns the cells in column-major fill order plus the per-column grouping.
  */
-async function buildGrid(origin: SurfaceRef, n: number): Promise<SurfaceRef[]> {
-  const { cols } = gridDims(n);
-  const counts = cellsPerColumn(n, cols);
-
+async function buildGrid(origin: SurfaceRef, cols: number, rows: number): Promise<BuiltGrid> {
   // First column anchor splits off the origin so the terminal is not overwritten.
   const colAnchors: SurfaceRef[] = [await newSplit(origin, "down")];
   for (let c = 1; c < cols; c++) {
     colAnchors.push(await newSplit(colAnchors[c - 1]!, "right"));
   }
 
-  const surfaces: SurfaceRef[] = [];
+  const columns: SurfaceRef[][] = [];
+  const cells: SurfaceRef[] = [];
   for (let c = 0; c < cols; c++) {
     let prev = colAnchors[c]!;
-    const count = counts[c]!;
-    surfaces.push(prev);
-    for (let r = 1; r < count; r++) {
+    const col: SurfaceRef[] = [prev];
+    for (let r = 1; r < rows; r++) {
       prev = await newSplit(prev, "down");
-      surfaces.push(prev);
+      col.push(prev);
     }
+    columns.push(col);
+    cells.push(...col);
   }
-  return surfaces;
+  return { cells, columns };
 }
 
-/** Open each slot's bare interactive TUI in its own pane; return the slot-id→surface map. */
+/**
+ * Resize a row/column of panes so they are all the same size along one axis. cmux halves on every
+ * split, so a freshly built strip is 1/2, 1/4, 1/4, …; we walk the internal boundaries left→right
+ * (top→bottom) and, re-reading sizes each step, nudge each pane to the average of what remains. The
+ * outermost boundary (with the origin/edge) is never touched.
+ */
+async function equalizeStrip(
+  paneRefs: PaneRef[],
+  axis: "h" | "v",
+  workspace: string,
+): Promise<void> {
+  const k = paneRefs.length;
+  if (k < 2) return;
+  for (let i = 0; i < k - 1; i++) {
+    const panes = await listPanes(workspace);
+    const sizeOf = (ref: PaneRef) => {
+      const p = panes.find((q) => q.ref === ref);
+      return p ? (axis === "h" ? p.width : p.height) : 0;
+    };
+    const remaining = paneRefs.slice(i);
+    const total = remaining.reduce((sum, ref) => sum + sizeOf(ref), 0);
+    const target = total / remaining.length;
+    const delta = target - sizeOf(paneRefs[i]!);
+    if (Math.abs(delta) < 1) continue;
+    // Move only the boundary between this pane and the next, so already-fixed panes stay put.
+    if (delta > 0) {
+      await resizePane(paneRefs[i]!, axis === "h" ? "R" : "D", delta, workspace);
+    } else {
+      await resizePane(paneRefs[i + 1]!, axis === "h" ? "L" : "U", -delta, workspace);
+    }
+  }
+}
+
+/** Make every cell of a freshly built grid the same size (columns first, then rows per column). */
+async function equalizeGrid(grid: BuiltGrid, workspace: string): Promise<void> {
+  const panes = await listPanes(workspace);
+  const paneOf = (surface: SurfaceRef): PaneRef | null =>
+    panes.find((p) => p.surfaceRefs.includes(surface))?.ref ?? null;
+
+  // Equalise column widths using each column's top cell as its representative pane.
+  const colTops = grid.columns
+    .map((col) => paneOf(col[0]!))
+    .filter((r): r is PaneRef => r !== null);
+  await equalizeStrip(colTops, "h", workspace);
+
+  // Equalise row heights within each column.
+  for (const col of grid.columns) {
+    if (col.length < 2) continue;
+    const cellPanes = col.map(paneOf).filter((r): r is PaneRef => r !== null);
+    await equalizeStrip(cellPanes, "v", workspace);
+  }
+}
+
+/**
+ * Open each slot's bare interactive TUI in its own equal-sized pane; return the slot-id→surface
+ * map. Pads to a rectangular grid (trailing empty panes) so every agent pane is the same size.
+ */
 async function openGrid(
   origin: SurfaceRef,
   targets: BroadcastTarget[],
   cwd: string,
+  workspace: string,
 ): Promise<Record<string, SurfaceRef>> {
-  const surfaces = await buildGrid(origin, targets.length);
+  const { cols, rows } = gridDims(targets.length);
+  const grid = await buildGrid(origin, cols, rows);
+  await equalizeGrid(grid, workspace);
+
   const map: Record<string, SurfaceRef> = {};
   for (let i = 0; i < targets.length; i++) {
     const t = targets[i]!;
-    const surface = surfaces[i]!;
+    const surface = grid.cells[i]!;
     await sendLine(surface, `cd ${shq(cwd)} && ${t.openCommand}`);
     map[t.id] = surface;
   }
+  // Trailing cells (grid.cells beyond targets.length) stay as bare shells — the padding that keeps
+  // every agent pane the same size.
   return map;
 }
 
@@ -267,21 +350,26 @@ export interface BroadcastArgs {
   text: string;
   /** Optional cwd override from `--cwd`. */
   cwd: string | null;
+  /** `--new`: tear down any reusable grid and build a fresh one. */
+  fresh: boolean;
 }
 
-/** Parse the args after the `all` subcommand: `[--cwd DIR] [text...]`. */
+/** Parse the args after the `all` subcommand: `[--cwd DIR] [--new] [text...]`. */
 export function parseBroadcastArgs(argv: string[]): BroadcastArgs {
   let cwd: string | null = null;
+  let fresh = false;
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === "--cwd") {
       cwd = argv[++i] ?? null;
+    } else if (arg === "--new" || arg === "-n") {
+      fresh = true;
     } else {
       rest.push(arg);
     }
   }
-  return { text: rest.join(" ").trim(), cwd };
+  return { text: rest.join(" ").trim(), cwd, fresh };
 }
 
 /** Is the saved grid still live? Probe one stored surface; a read failure means it is stale. */
@@ -306,7 +394,7 @@ export interface BroadcastContext {
 /** Run `comux all [text]`: ensure the grid is open (build or reuse), then broadcast text if any. */
 export async function runBroadcast(argv: string[], ctx: BroadcastContext): Promise<void> {
   const log = ctx.log ?? ((m: string) => console.log(m));
-  const { text } = parseBroadcastArgs(argv);
+  const { text, fresh } = parseBroadcastArgs(argv);
   const config = await loadConfig();
   const hash = rosterHash(config.broadcast.roster);
 
@@ -316,11 +404,20 @@ export async function runBroadcast(argv: string[], ctx: BroadcastContext): Promi
     return;
   }
 
-  const saved = await loadState(ctx.workspace);
+  // `--new` tears down a still-live grid so a fresh one isn't stacked on top of the old panes.
+  if (fresh) {
+    const old = await loadState(ctx.workspace);
+    if (old?.slots && (await gridIsLive(old.slots))) {
+      log("closing existing grid (--new) …");
+      await Promise.all(Object.values(old.slots).map((s) => closeSurface(s).catch(() => {})));
+    }
+  }
+
+  const saved = fresh ? null : await loadState(ctx.workspace);
   let map = saved?.slots ?? null;
   if (!map || saved?.rosterHash !== hash || !(await gridIsLive(map))) {
     log(`opening ${targets.length} agent panes in ${ctx.cwd} …`);
-    map = await openGrid(ctx.origin, targets, ctx.cwd);
+    map = await openGrid(ctx.origin, targets, ctx.cwd, ctx.workspace);
     await saveState({ workspace: ctx.workspace, cwd: ctx.cwd, rosterHash: hash, slots: map });
     log(`grid: ${targets.map((t) => t.displayName).join(" · ")}`);
   } else {
