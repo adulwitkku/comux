@@ -71,19 +71,19 @@ try {
   toggled[0]!.enabled = false;
   ok("rosterHash changes on toggle", rosterHash(toggled) !== hashA);
 
-  // --- Step 6: grid math — Equal-grid dims tile every count 1–9 with at most one pad cell ---
+  // --- Step 6: grid math — Equal-grid dims tile every cell count (caller + up to 9 agents = 10) ---
   const dims = (n: number) => `${gridDims(n).cols}x${gridDims(n).rows}`;
   const expected: Record<number, string> = {
-    1: "1x1", 2: "2x1", 3: "3x1", 4: "2x2", 5: "3x2", 6: "3x2", 7: "4x2", 8: "4x2", 9: "3x3",
+    1: "1x1", 2: "2x1", 3: "3x1", 4: "2x2", 5: "3x2", 6: "3x2", 7: "4x2", 8: "4x2", 9: "3x3", 10: "5x2",
   };
   ok(
-    "gridDims tiles 1–9 as expected (landscape, ≤1 pad)",
+    "gridDims tiles 1–10 cells as expected (landscape, ≤1 pad)",
     Object.entries(expected).every(([n, want]) => dims(Number(n)) === want),
     Object.keys(expected).map((n) => `${n}:${dims(Number(n))}`).join(" "),
   );
   ok(
     "gridDims pads only when needed (pad ≤ 1, never drops a cell)",
-    [1, 2, 3, 4, 5, 6, 7, 8, 9].every((n) => {
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].every((n) => {
       const { cols, rows } = gridDims(n);
       const pad = cols * rows - n;
       return pad >= 0 && pad <= 1;

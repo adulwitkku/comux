@@ -113,11 +113,12 @@ after which it becomes selectable again.
 
 **Broadcast**:
 A manual fan-out mode (`comux all`) that opens each **enabled** slot in the user's **Broadcast
-roster** as its bare interactive TUI in its own pane (with that slot's chosen model), split off
-below the caller's terminal in the **same** workspace, and sends the same text to all of them at
-once, for the human to drive and compare. Slots whose CLI binary is not installed are skipped with
-a warning; the grid sizes to however many panes actually opened (1–9), laid out as an **Equal
-grid** so every agent pane is the same size. It deliberately bypasses the orchestration core — no
+roster** as its bare interactive TUI in its own pane (with that slot's chosen model), in the
+**same** workspace as the caller, and sends the same text to all of them at once, for the human to
+drive and compare. The caller's own terminal becomes the top-left cell of the grid, so the layout
+is an **Equal grid** of (agents + 1) equal-sized cells — up to ten, i.e. nine agents plus the
+caller. Slots whose CLI binary is not installed are skipped with a warning. It deliberately
+bypasses the orchestration core — no
 Orchestrator intent parse, no Capability/chain/Scheduler, no PLAN/Step/Acceptance check, no
 Checkpoint — and runs the Agents **unconfined in a shared cwd** (the sandbox of ADR-0005 does not
 apply). It is an advisory/compare playground, not autonomous orchestration; collisions between
@@ -128,12 +129,13 @@ _Avoid_: Dispatch (a Dispatch is a single routed task through a chain; a Broadca
 opposite — unrouted, to everyone at once)
 
 **Equal grid**:
-The Broadcast layout rule: `n` agent panes (1–9) are arranged in a `cols × rows` grid chosen to
-minimise `|cols − rows| + 2·(cols·rows − n)` (landscape-biased on ties), then resized so **every
-agent pane is the same size**. Because cmux only splits a pane in half, the grid is built with
-`new-split` and then equalised with `resize-pane` (boundaries nudged outermost-in by computed pixel
-amounts). Counts that don't tile evenly (primes like 5, 7) pad the grid with a trailing empty pane
-rather than letting any pane differ in size.
+The Broadcast layout rule. The caller's terminal is counted as one cell, so for `a` agents there
+are `n = a + 1` cells (max 10: nine agents + caller). They are arranged in a `cols × rows` grid
+chosen to minimise `|cols − rows| + 2·(cols·rows − n)` (landscape-biased on ties), with the caller
+as the top-left cell, then resized so **every cell is the same size**. Because cmux only splits a
+pane in half, the grid is built with `new-split` and then equalised with `resize-pane` (boundaries
+nudged outermost-in by computed pixel amounts). Counts that don't tile evenly (e.g. 4 agents → 5
+cells) pad the grid with a trailing empty pane rather than letting any pane differ in size.
 
 **Broadcast roster**:
 The ordered list of Broadcast slots kept in the user's config (`broadcast.roster` in

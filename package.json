@@ -1,6 +1,6 @@
 {
   "name": "comux",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "Local-first AI orchestrator that runs coding agents visibly inside cmux",
   "license": "MIT",
   "type": "module",

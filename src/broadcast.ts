@@ -157,10 +157,11 @@ export async function loadState(workspace: string): Promise<BroadcastState | nul
 // --------------------------------------------------------------------------- //
 
 /**
- * Columns × rows for `n` panes (1–9), chosen so every pane ends up the same size.
- * We minimise `|cols − rows| + 2·pad` (pad = cols·rows − n) and, on a tie, prefer fewer pad
- * cells and then a wider (landscape) grid. Counts that don't tile evenly (5, 7) keep one trailing
- * cell empty rather than letting any pane differ in size.
+ * Columns × rows for `n` cells, chosen so every cell ends up the same size. Broadcast counts the
+ * caller's terminal as one cell, so `n` is (agents + 1) and tops out at 10 (nine agents + caller).
+ * We minimise `|cols − rows| + 2·pad` (pad = cols·rows − n) and, on a tie, prefer fewer pad cells
+ * and then a wider (landscape) grid. Counts that don't tile evenly keep one trailing cell empty
+ * rather than letting any pane differ in size.
  */
 export function gridDims(n: number): { cols: number; rows: number } {
   if (n <= 0) return { cols: 0, rows: 0 };
@@ -182,21 +183,23 @@ export function gridDims(n: number): { cols: number; rows: number } {
 
 /** A built grid: the panes in column-major fill order, grouped by column for equalising. */
 interface BuiltGrid {
-  /** All cell surfaces in fill order (col 0 top→bottom, then col 1, …); length = cols·rows. */
+  /** All cell surfaces in fill order (col 0 top→bottom, then col 1, …); length = cols·rows.
+   *  cells[0] is the caller's own terminal (top-left); agents fill cells[1..]. */
   cells: SurfaceRef[];
   /** Surfaces per column, top→bottom — used to equalise row heights within each column. */
   columns: SurfaceRef[][];
 }
 
 /**
- * Build a uniform `cols × rows` grid below the caller's terminal using only `newSplit`. The origin
- * terminal is kept (it stays the controlling pane); the grid is split off beneath it. Every column
- * gets the full `rows` cells (trailing cells beyond `n` are padding), so the layout is rectangular
- * and can be equalised. Returns the cells in column-major fill order plus the per-column grouping.
+ * Build a uniform `cols × rows` grid out of the caller's terminal using only `newSplit`. The caller
+ * itself becomes the **top-left cell** (cells[0]) — it is counted as one equal-sized cell, not kept
+ * as a separate strip — and the rest of the grid is split off around it. Every column gets the full
+ * `rows` cells (trailing cells beyond what's needed are padding), so the layout is rectangular and
+ * can be equalised. Returns the cells in column-major fill order plus the per-column grouping.
  */
 async function buildGrid(origin: SurfaceRef, cols: number, rows: number): Promise<BuiltGrid> {
-  // First column anchor splits off the origin so the terminal is not overwritten.
-  const colAnchors: SurfaceRef[] = [await newSplit(origin, "down")];
+  // The caller's terminal is column 0's anchor (top-left cell); split right for the other columns.
+  const colAnchors: SurfaceRef[] = [origin];
   for (let c = 1; c < cols; c++) {
     colAnchors.push(await newSplit(colAnchors[c - 1]!, "right"));
   }
@@ -271,7 +274,9 @@ async function equalizeGrid(grid: BuiltGrid, workspace: string): Promise<void> {
 
 /**
  * Open each slot's bare interactive TUI in its own equal-sized pane; return the slot-id→surface
- * map. Pads to a rectangular grid (trailing empty panes) so every agent pane is the same size.
+ * map. The caller's terminal is counted as cells[0], so the grid is sized for (agents + 1) cells;
+ * trailing cells beyond what's used stay as bare shells — the padding that keeps every pane the
+ * same size.
  */
 async function openGrid(
   origin: SurfaceRef,
@@ -279,19 +284,17 @@ async function openGrid(
   cwd: string,
   workspace: string,
 ): Promise<Record<string, SurfaceRef>> {
-  const { cols, rows } = gridDims(targets.length);
+  const { cols, rows } = gridDims(targets.length + 1);
   const grid = await buildGrid(origin, cols, rows);
   await equalizeGrid(grid, workspace);
 
   const map: Record<string, SurfaceRef> = {};
   for (let i = 0; i < targets.length; i++) {
     const t = targets[i]!;
-    const surface = grid.cells[i]!;
+    const surface = grid.cells[i + 1]!; // cells[0] is the caller's own terminal — skip it.
     await sendLine(surface, `cd ${shq(cwd)} && ${t.openCommand}`);
     map[t.id] = surface;
   }
-  // Trailing cells (grid.cells beyond targets.length) stay as bare shells — the padding that keeps
-  // every agent pane the same size.
   return map;
 }
 
