@@ -46,6 +46,8 @@ export interface Config {
   bypass: boolean;
   /** Broadcast roster for `comux all` (ADR-0021). Edited via `/broadcast`. */
   broadcast: BroadcastConfig;
+  /** Orchestrator model, picked via /model. COMUX_MODEL env still overrides when set. */
+  model?: string;
 }
 
 /**
@@ -104,6 +106,7 @@ export async function loadConfig(): Promise<Config> {
       chains: { ...DEFAULT_CHAINS, ...(raw.chains ?? {}) },
       bypass: raw.bypass ?? true, // ADR-0016: Bypass mode is default ON
       broadcast: { roster: raw.broadcast?.roster ?? structuredClone(DEFAULT_BROADCAST_ROSTER) },
+      ...(raw.model ? { model: raw.model } : {}),
     };
   } catch {
     return {

@@ -9,7 +9,7 @@
 //   comux all [--new] [text]  # Broadcast: open the configured roster (equal grid); send text to all
 //   comux --version | --help
 //
-// In the TUI:  type to chat · "/" commands · "@" file mentions · ⏎ run · ctrl+c exit
+// In the TUI:  type to chat · "/" commands · "@" file mentions · alt+⏎ newline · ⏎ run · ctrl+c exit
 
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -22,7 +22,7 @@ import { ensureWorkspace, readPlan, currentBranch, listFiles, clearChatFiles, li
 import { runTurn } from "../src/harness.ts";
 import { startFeedWatcher } from "../src/feed.ts";
 import { Tui, type Item } from "../src/tui.ts";
-import { lastStats } from "../src/llm.ts";
+import { lastStats, listModels, setDefaultModel } from "../src/llm.ts";
 import { VERSION } from "../src/version.ts";
 import { c, ui } from "../src/ui.ts";
 import {
@@ -116,7 +116,8 @@ const workspace = await ensureWorkspace(
   process.env.COMUX_WORKSPACE ?? process.cwd(),
 );
 const selfSurface = await identifySelf();
-const model = process.env.COMUX_MODEL ?? "gemma4:12b-mlx";
+const envModel = process.env.COMUX_MODEL;
+let model = envModel ?? "gemma4:12b-mlx"; // refined from config.model below; switched via /model
 const autoYes = !!process.env.COMUX_YES;
 
 // First run writes the default per-capability chains; thereafter load what the user has (and may
@@ -124,6 +125,8 @@ const autoYes = !!process.env.COMUX_YES;
 const firstRun = !configExists();
 const firstSetup: SetupResult | null = firstRun ? await runSetup() : null;
 let config: Config = firstSetup?.config ?? (await loadConfig());
+if (!envModel && config.model) model = config.model;
+setDefaultModel(model);
 
 /** Pretty-print the chains and which Agent CLIs are present. */
 function showAgents(): void {
@@ -140,18 +143,52 @@ function showAgents(): void {
   }
 }
 
-const commands: Item[] = [
-  { name: "/new", desc: "clear chat history and start a new session" },
-  { name: "/open", desc: "open a file from .comux/ (replaces viewer tab)" },
-  { name: "/open-new", desc: "open a file from .comux/ in a new tab" },
-  { name: "/setup", desc: "detect agents & write default chains" },
-  { name: "/settings", desc: "edit agent chains per capability" },
-  { name: "/broadcast", desc: "edit broadcast roster (comux all)" },
-  { name: "/agents", desc: "show capability chains" },
-  { name: "/plan", desc: "show PLAN.md" },
-  { name: "/ws", desc: "show workspace path" },
-  { name: "/help", desc: "keybindings & commands" },
-  { name: "/exit", desc: "quit" },
+/** One slash command: a palette entry + optional argument completion + its handler.
+ *  The palette, dispatch, and arg completion all read this one table. */
+interface Command {
+  name: string;
+  desc: string;
+  aliases?: string[];
+  /** Completion items for the argument part (palette shown after "<name> "). */
+  complete?: (query: string) => Item[];
+  run: (arg: string) => Promise<void> | void;
+}
+
+let quit = false;
+
+const comuxFileItems = (query: string): Item[] => {
+  const q = query.toLowerCase();
+  return listComuxFiles(workspace)
+    .filter((f) => f.toLowerCase().includes(q))
+    .slice(0, 200)
+    .map((f) => ({ name: f, desc: "" }));
+};
+
+const registry: Command[] = [
+  { name: "/new", desc: "clear chat history and start a new session", run: runNew },
+  {
+    name: "/open", desc: "open a file from .comux/ (replaces viewer tab)", complete: comuxFileItems,
+    run: async (arg) => {
+      if (!arg) { say(c.gray("  พิมพ์ /open <ชื่อไฟล์> เพื่อเปิด — เว้นวรรคแล้วพิมพ์เพื่อ search")); return; }
+      await openComuxFile(arg, "comux-result", true);
+    },
+  },
+  {
+    name: "/open-new", desc: "open a file from .comux/ in a new tab", complete: comuxFileItems,
+    run: async (arg) => {
+      if (!arg) { say(c.gray("  พิมพ์ /open-new <ชื่อไฟล์> เพื่อเปิด tab ใหม่ — เว้นวรรคแล้วพิมพ์เพื่อ search")); return; }
+      await openComuxFile(arg, basename(arg), false);
+    },
+  },
+  { name: "/model", desc: "pick the Orchestrator model (ollama)", run: runModelPicker },
+  { name: "/setup", desc: "detect agents & write default chains", run: runSetupCmd },
+  { name: "/settings", desc: "edit agent chains per capability", run: runSettingsPicker },
+  { name: "/broadcast", desc: "edit broadcast roster (comux all)", run: runBroadcastPicker },
+  { name: "/agents", desc: "show capability chains", run: () => showAgents() },
+  { name: "/plan", desc: "show PLAN.md", run: async () => say(c.gray(await readPlan(workspace))) },
+  { name: "/ws", desc: "show workspace path", run: () => say(c.blue(`  ${workspace}`)) },
+  { name: "/help", desc: "keybindings & commands", run: runHelp },
+  { name: "/exit", desc: "quit", aliases: ["/quit"], run: () => { quit = true; } },
 ];
 
 const tilde = (p: string) => (p.startsWith(homedir()) ? "~" + p.slice(homedir().length) : p);
@@ -170,10 +207,11 @@ function statusBar(): string {
 }
 
 const tui = new Tui({
-  commands,
+  commands: registry.map(({ name, desc }) => ({ name, desc })),
   status: statusBar,
   listFiles: () => listFiles(workspace),
-  listOpenFiles: () => listComuxFiles(workspace),
+  completeArg: (cmd, query) => registry.find((x) => x.name === cmd)?.complete?.(query) ?? [],
+  historyPath: join(workspace, ".comux", "history"),
 });
 const say = (m: string) => tui.print(m);
 
@@ -234,126 +272,126 @@ async function openComuxFile(filename: string, tabName: string, closeExisting: b
   }
 }
 
-loop: for (;;) {
+function runHelp(): void {
+  say(c.gray("  /model  orchestrator model · /settings  edit chains · /broadcast  edit roster · /setup  reset chains"));
+  say(c.gray("  /agents  view chains · /plan  PLAN.md · /new  new session · /open  view file · /ws · /exit"));
+  say(c.gray("  keys: alt+⏎ newline · ↑↓ palette/cursor/history · ⇥ complete · ctrl+a/e/u/k/w edit · alt+←→ word · esc clear"));
+}
+
+async function runNew(): Promise<void> {
+  const resultSurface = await findResultSurface().catch(() => null);
+  if (resultSurface) await closeSurface(resultSurface).catch(() => {});
+  const n = await clearChatFiles(workspace);
+  say(c.green(`  ✓ new session${n > 0 ? ` — cleared ${n} chat file${n !== 1 ? "s" : ""}` : ""}`));
+}
+
+async function runSetupCmd(): Promise<void> {
+  const r = await runSetup();
+  config = r.config;
+  say(c.green("  ✓ wrote default agent chains:"));
+  showAgents();
+  say(
+    r.hooksInstalled
+      ? c.gray("  ✓ installed cmux agent hooks (completion detection)")
+      : c.red("  ⚠ `cmux hooks setup` did not run cleanly — completion falls back to the exit sentinel"),
+  );
+}
+
+/** /settings — pick a capability, then toggle/reorder its chain (order = Scheduler preference). */
+async function runSettingsPicker(): Promise<void> {
+  const editable: ChainKey[] = ["web_search", "image", "coding", "planning"];
+  const installed = new Map(detectAgents().map((a) => [a.name, a.installed]));
+  let changed = false;
+  for (;;) {
+    const items: Item[] = [
+      ...editable.map((k) => ({ name: k as string, desc: config.chains[k].join(" → ") || "(empty)" })),
+      { name: "done", desc: changed ? "save & exit" : "exit" },
+    ];
+    const i = await tui.pickOne("Edit agent chains — pick a capability", items);
+    if (i == null || i >= editable.length) break;
+    const key = editable[i]!;
+    const chain = config.chains[key];
+    const names = [...chain, ...[...installed.keys()].filter((n) => !chain.includes(n))];
+    const rows = names.map((n) => ({
+      label: n,
+      detail: installed.get(n) ? "" : "not installed",
+      enabled: chain.includes(n),
+      value: n,
+    }));
+    const res = await tui.pickList(`${key} chain — order = preference`, rows, { toggle: true, reorder: true });
+    if (!res) continue;
+    config.chains[key] = res.filter((r) => r.enabled).map((r) => r.value);
+    changed = true;
+  }
+  if (changed) {
+    await saveConfig(config);
+    say(c.green("  ✓ saved"));
+    showAgents();
+  }
+}
+
+/** /broadcast — toggle/reorder/rename roster slots in one picker (ADR-0021). */
+async function runBroadcastPicker(): Promise<void> {
+  const roster = config.broadcast?.roster ?? structuredClone(DEFAULT_BROADCAST_ROSTER);
+  const rows = roster.map((s) => ({
+    label: s.displayName,
+    detail: s.binary + (s.model ? `  ${s.model}` : ""),
+    enabled: s.enabled,
+    value: s,
+  }));
+  const res = await tui.pickList("Broadcast roster (comux all)", rows, {
+    toggle: true,
+    reorder: true,
+    rename: true,
+  });
+  if (!res) { say(c.gray("  cancelled")); return; }
+  config.broadcast = {
+    roster: res.map((r) => ({ ...r.value, enabled: r.enabled ?? false, displayName: r.label })),
+  };
+  await saveConfig(config);
+  say(c.green("  ✓ saved broadcast roster"));
+}
+
+/** /model — pick the Orchestrator model from the Ollama server and persist it. */
+async function runModelPicker(): Promise<void> {
+  let models: string[];
+  try {
+    models = await listModels();
+  } catch (e) {
+    say(ui.warn(`Ollama ไม่ตอบ: ${(e as Error).message}`));
+    return;
+  }
+  if (!models.length) { say(ui.warn("ไม่พบ model บน Ollama server")); return; }
+  const items = models.map((m) => ({ name: m, desc: m === model ? "(current)" : "" }));
+  const i = await tui.pickOne("Orchestrator model (ollama)", items, Math.max(0, models.indexOf(model)));
+  if (i == null) return;
+  config.model = models[i]!;
+  await saveConfig(config);
+  if (envModel) {
+    say(ui.warn(`saved แต่ COMUX_MODEL=${envModel} ใน env ยัง override อยู่ — unset env เพื่อใช้ค่าจาก config`));
+  } else {
+    model = config.model;
+    setDefaultModel(model);
+    say(ui.ok(`model → ${model}`));
+  }
+}
+
+for (;;) {
   const line = (await tui.readLine())?.trim();
   if (line == null) break; // ctrl+c / ctrl+d
   if (!line) continue;
 
-  switch (line) {
-    case "/exit":
-    case "/quit":
-      break loop;
-    case "/help":
-      say(c.gray("  /new  new session  ·  /setup  reset chains  ·  /settings  edit chains  ·  /broadcast  edit roster  ·  /agents  view chains  ·  /plan  PLAN.md  ·  /ws  ·  /exit"));
-      say(c.gray("  keys: ↑↓ choose command · ⏎ run · ⇥ complete · esc clear · ctrl+c exit"));
-      continue;
-    case "/setup": {
-      const r = await runSetup();
-      config = r.config;
-      say(c.green("  ✓ wrote default agent chains:"));
-      showAgents();
-      say(
-        r.hooksInstalled
-          ? c.gray("  ✓ installed cmux agent hooks (completion detection)")
-          : c.red("  ⚠ `cmux hooks setup` did not run cleanly — completion falls back to the exit sentinel"),
-      );
+  if (line.startsWith("/")) {
+    const sp = line.search(/\s/);
+    const name = sp === -1 ? line : line.slice(0, sp);
+    const arg = sp === -1 ? "" : line.slice(sp + 1).trim();
+    const cmd = registry.find((x) => x.name === name || x.aliases?.includes(name));
+    if (!cmd) {
+      say(ui.warn(`ไม่รู้จักคำสั่ง ${name} — ดู /help`));
       continue;
     }
-    case "/settings": {
-      const editableChains: ChainKey[] = ["web_search", "image", "coding", "planning"];
-      say(c.gray("  Edit agent chains (comma-separated names). Press ⏎ to keep current."));
-      say(c.gray(`  Available agents: ${Object.keys(detectAgents().reduce((m, a) => { if (a.installed) m[a.name] = 1; return m; }, {} as Record<string,number>)).join(", ") || "none detected"}`));
-      let changed = false;
-      for (const key of editableChains) {
-        const current = config.chains[key].join(", ") || "(empty)";
-        say(c.cyan(`  ${key.padEnd(11)}`) + c.gray(`[${current}]: `));
-        const input = (await tui.readLine())?.trim();
-        if (!input) continue;
-        const names = input.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
-        if (names.length) { config.chains[key] = names; changed = true; }
-      }
-      if (changed) {
-        await saveConfig(config);
-        say(c.green("  ✓ saved"));
-        showAgents();
-      } else {
-        say(c.gray("  no changes"));
-      }
-      continue;
-    }
-    case "/agents":
-      showAgents();
-      continue;
-    case "/broadcast": {
-      const roster = config.broadcast?.roster ?? DEFAULT_BROADCAST_ROSTER;
-      say(c.gray("  Broadcast roster (comux all) — slot number toggles enabled, or enter to skip:"));
-      for (let i = 0; i < roster.length; i++) {
-        const s = roster[i]!;
-        const mark = s.enabled ? c.green("on ") : c.red("off");
-        const model = s.model ? c.gray(`  ${s.model}`) : "";
-        say(`  ${c.cyan(String(i + 1).padStart(2))}  ${mark}  ${s.displayName}${model}  ${c.gray(s.binary)}`);
-      }
-      let changed = false;
-      const toggleInput = (await tui.readLine())?.trim();
-      if (toggleInput && /^\d+$/.test(toggleInput)) {
-        const idx = Number(toggleInput) - 1;
-        if (idx >= 0 && idx < roster.length) {
-          roster[idx]!.enabled = !roster[idx]!.enabled;
-          changed = true;
-          say(c.gray(`  ${roster[idx]!.displayName}: ${roster[idx]!.enabled ? "on" : "off"}`));
-        }
-      }
-      say(c.gray("  Edit display name — slot number, or enter to skip:"));
-      const editSlot = (await tui.readLine())?.trim();
-      if (editSlot && /^\d+$/.test(editSlot)) {
-        const idx = Number(editSlot) - 1;
-        if (idx >= 0 && idx < roster.length) {
-          say(c.gray(`  New name for "${roster[idx]!.displayName}" (enter to keep): `));
-          const newName = (await tui.readLine())?.trim();
-          if (newName) {
-            roster[idx]!.displayName = newName;
-            changed = true;
-          }
-        }
-      }
-      if (changed) {
-        config.broadcast = { roster };
-        await saveConfig(config);
-        say(c.green("  ✓ saved broadcast roster"));
-      } else {
-        say(c.gray("  no changes"));
-      }
-      continue;
-    }
-    case "/open":
-      say(c.gray("  พิมพ์ /open <ชื่อไฟล์> เพื่อเปิด — เว้นวรรคแล้วพิมพ์เพื่อ search"));
-      continue;
-    case "/open-new":
-      say(c.gray("  พิมพ์ /open-new <ชื่อไฟล์> เพื่อเปิด tab ใหม่ — เว้นวรรคแล้วพิมพ์เพื่อ search"));
-      continue;
-    case "/ws":
-      say(c.blue(`  ${workspace}`));
-      continue;
-    case "/plan":
-      say(c.gray(await readPlan(workspace)));
-      continue;
-    case "/new": {
-      const resultSurface = await findResultSurface().catch(() => null);
-      if (resultSurface) await closeSurface(resultSurface).catch(() => {});
-      const n = await clearChatFiles(workspace);
-      say(c.green(`  ✓ new session${n > 0 ? ` — cleared ${n} chat file${n !== 1 ? "s" : ""}` : ""}`));
-      continue;
-    }
-  }
-
-  if (line.startsWith("/open ")) {
-    await openComuxFile(line.slice("/open ".length).trim(), "comux-result", true);
-    continue;
-  }
-
-  if (line.startsWith("/open-new ")) {
-    const filename = line.slice("/open-new ".length).trim();
-    await openComuxFile(filename, basename(filename), false);
+    await cmd.run(arg);
+    if (quit) break;
     continue;
   }
 

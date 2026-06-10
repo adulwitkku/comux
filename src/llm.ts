@@ -25,13 +25,28 @@ export interface ChatOptions {
 
 const DEFAULTS = {
   baseUrl: process.env.OLLAMA_HOST ?? "http://localhost:11434",
-  model: process.env.COMUX_MODEL ?? "gemma4:12b-mlx",
 };
+
+// The Orchestrator model is resolved at startup (COMUX_MODEL env > config.json > default)
+// and can be switched at runtime via /model, hence a setter rather than a constant.
+let defaultModel = process.env.COMUX_MODEL ?? "gemma4:12b-mlx";
+
+export function setDefaultModel(model: string): void {
+  defaultModel = model;
+}
+
+/** Model names available on the Ollama server (for the /model picker). */
+export async function listModels(baseUrl = DEFAULTS.baseUrl): Promise<string[]> {
+  const res = await fetch(`${baseUrl}/api/tags`);
+  if (!res.ok) throw new Error(`Ollama ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const data = (await res.json()) as { models?: { name?: string }[] };
+  return (data.models ?? []).map((m) => m.name ?? "").filter(Boolean);
+}
 
 /** One non-streaming chat completion; returns the assistant message content. */
 export async function chat(messages: ChatMessage[], opts: ChatOptions = {}): Promise<string> {
   const baseUrl = opts.baseUrl ?? DEFAULTS.baseUrl;
-  const model = opts.model ?? DEFAULTS.model;
+  const model = opts.model ?? defaultModel;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), opts.timeoutMs ?? 120_000);
   try {

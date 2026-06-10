@@ -99,7 +99,12 @@ background **Feed watcher** (`src/feed.ts`) auto-answers agent Grilling prompts 
   with confinement dropped (ADR-0017), the primary undo for an unconfined, un-gated run. Agents work
   in their own workspace repo (`./workspace`).
 - **`scripts/harness.ts` + `src/tui.ts` + `src/ui.ts`** — the CLI entrypoint (`bin: comux`),
-  raw-mode TUI (slash commands, `@` file mentions, status bar), and styling helpers.
+  raw-mode TUI, and styling helpers. The TUI is a boxed multiline editor (alt+⏎ newline,
+  soft-wrap, bracketed paste, ↑ history persisted to `.comux/history`) with list pickers;
+  slash commands live in one registry table in `scripts/harness.ts` (`{name, desc, complete,
+  run}`) that drives the palette, dispatch, and per-command argument completion alike.
+  `/settings`, `/broadcast`, and `/model` are interactive pickers (toggle/reorder/rename);
+  `/model` persists the Orchestrator model to `config.model` (`COMUX_MODEL` env overrides).
 
 ## Conventions
 
