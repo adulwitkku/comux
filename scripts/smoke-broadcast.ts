@@ -15,12 +15,15 @@ const { DEFAULT_BROADCAST_ROSTER, rosterHash } = await import("../src/config.ts"
 const {
   gridDims,
   parseBroadcastArgs,
+  uniqueEnabledBinaries,
   dispatchSend,
   saveState,
   loadState,
+  deleteState,
   stateFile,
   buildOpenCommand,
   resolveBroadcastTargets,
+  BROADCAST_UPDATE_COMMANDS,
 } = await import("../src/broadcast.ts");
 import type { SendOps } from "../src/broadcast.ts";
 import type { SurfaceRef } from "../src/cmux.ts";
@@ -109,6 +112,36 @@ try {
   ok("parse --cwd before text", p.cwd === "/x" && p.text === "hello");
   const fp = parseBroadcastArgs(["--new", "hello", "world"]);
   ok("parse --new flag (not part of text)", fp.fresh === true && fp.text === "hello world");
+  ok("parse --update", parseBroadcastArgs(["--update"]).update === true);
+  ok("parse --close", parseBroadcastArgs(["--close"]).close === true);
+
+  let threw = false;
+  try {
+    parseBroadcastArgs(["--update", "--close"]);
+  } catch {
+    threw = true;
+  }
+  ok("parse rejects --update + --close", threw);
+  threw = false;
+  try {
+    parseBroadcastArgs(["--update", "hello"]);
+  } catch {
+    threw = true;
+  }
+  ok("parse rejects --update with text", threw);
+
+  // --- Step 8b: unique roster binaries + update registry ---
+  const uniq = uniqueEnabledBinaries(DEFAULT_BROADCAST_ROSTER);
+  ok("uniqueEnabledBinaries dedupes opencode", uniq.filter((b) => b === "opencode").length === 1);
+  ok(
+    "every default-roster binary has update commands",
+    uniq.every((b) => BROADCAST_UPDATE_COMMANDS[b]?.length),
+    uniq.join(", "),
+  );
+
+  // --- Step 8c: deleteState removes the state file ---
+  await deleteState("workspace:9");
+  ok("deleteState removes saved state", (await loadState("workspace:9")) === null);
 
   // --- Step 9: paste-mode dispatch picks the right cmux calls (recording mock) ---
   function recorder() {

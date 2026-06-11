@@ -9,7 +9,7 @@
 
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { REGISTRY, type Agent, type PasteMode } from "./agents.ts";
 import { loadConfig, rosterHash, type BroadcastSlot } from "./config.ts";
 import { configDir } from "./config.ts";
@@ -150,6 +150,11 @@ export async function loadState(workspace: string): Promise<BroadcastState | nul
   } catch {
     return null;
   }
+}
+
+export async function deleteState(workspace: string): Promise<void> {
+  const path = stateFile(workspace);
+  if (existsSync(path)) await unlink(path);
 }
 
 // --------------------------------------------------------------------------- //
@@ -355,12 +360,18 @@ export interface BroadcastArgs {
   cwd: string | null;
   /** `--new`: tear down any reusable grid and build a fresh one. */
   fresh: boolean;
+  /** `--update`: run package-manager updates for roster binaries (no cmux grid needed). */
+  update: boolean;
+  /** `--close`: hard-close agent panes tracked in the broadcast state file. */
+  close: boolean;
 }
 
-/** Parse the args after the `all` subcommand: `[--cwd DIR] [--new] [text...]`. */
+/** Parse the args after the `all` subcommand: `[--cwd DIR] [--new|--update|--close] [text...]`. */
 export function parseBroadcastArgs(argv: string[]): BroadcastArgs {
   let cwd: string | null = null;
   let fresh = false;
+  let update = false;
+  let close = false;
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -368,11 +379,130 @@ export function parseBroadcastArgs(argv: string[]): BroadcastArgs {
       cwd = argv[++i] ?? null;
     } else if (arg === "--new" || arg === "-n") {
       fresh = true;
+    } else if (arg === "--update") {
+      update = true;
+    } else if (arg === "--close") {
+      close = true;
     } else {
       rest.push(arg);
     }
   }
-  return { text: rest.join(" ").trim(), cwd, fresh };
+  const parsed = { text: rest.join(" ").trim(), cwd, fresh, update, close };
+  validateBroadcastArgs(parsed);
+  return parsed;
+}
+
+/** Action flags on `comux all` are mutually exclusive and do not take broadcast text. */
+export function validateBroadcastArgs(args: BroadcastArgs): void {
+  const actions = [args.fresh, args.update, args.close].filter(Boolean).length;
+  if (actions > 1) {
+    throw new Error("comux all: --new, --update, and --close are mutually exclusive");
+  }
+  if ((args.update || args.close) && args.text) {
+    throw new Error("comux all: --update and --close do not accept broadcast text");
+  }
+}
+
+/** Unique CLI binaries from enabled roster slots, in roster order. */
+export function uniqueEnabledBinaries(roster: BroadcastSlot[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const slot of roster) {
+    if (!slot.enabled || seen.has(slot.binary)) continue;
+    seen.add(slot.binary);
+    out.push(slot.binary);
+  }
+  return out;
+}
+
+// --------------------------------------------------------------------------- //
+// Broadcast update — external package-manager refresh per roster binary         //
+// --------------------------------------------------------------------------- //
+
+/** Ordered update attempts per binary (brew-first, npm fallback where common). */
+export const BROADCAST_UPDATE_COMMANDS: Record<string, string[][]> = {
+  pi: [["brew", "upgrade", "pi"]],
+  claude: [["brew", "upgrade", "claude"], ["npm", "update", "-g", "@anthropic-ai/claude-code"]],
+  codex: [["brew", "upgrade", "codex"], ["npm", "update", "-g", "@openai/codex"]],
+  "cursor-agent": [["brew", "upgrade", "cursor-agent"]],
+  agent: [["brew", "upgrade", "cursor-agent"]],
+  agy: [["brew", "upgrade", "antigravity"], ["brew", "upgrade", "agy"]],
+  opencode: [["brew", "upgrade", "opencode"], ["npm", "update", "-g", "opencode-ai"]],
+};
+
+export type UpdateRun = (cmd: string[]) => Promise<number>;
+
+const defaultUpdateRun: UpdateRun = async (cmd) => {
+  if (!Bun.which(cmd[0]!)) return -1;
+  const proc = Bun.spawn(cmd, { stdout: "inherit", stderr: "inherit", stdin: "inherit" });
+  return await proc.exited;
+};
+
+/** Run mapped package-manager updates for each unique enabled roster binary. */
+export async function runBroadcastUpdate(
+  log: (msg: string) => void = console.log,
+  run: UpdateRun = defaultUpdateRun,
+): Promise<number> {
+  const config = await loadConfig();
+  const binaries = uniqueEnabledBinaries(config.broadcast.roster);
+  if (binaries.length === 0) {
+    log("no enabled broadcast slots — enable slots in /broadcast.");
+    return 0;
+  }
+
+  let failed = 0;
+  for (const binary of binaries) {
+    if (!Bun.which(binary)) {
+      log(`skip: ${binary} (not installed)`);
+      continue;
+    }
+    const attempts = BROADCAST_UPDATE_COMMANDS[binary];
+    if (!attempts?.length) {
+      log(`skip: ${binary} (no update command mapped)`);
+      continue;
+    }
+    log(`updating ${binary} …`);
+    let ok = false;
+    for (const cmd of attempts) {
+      if (!Bun.which(cmd[0]!)) continue;
+      const code = await run(cmd);
+      if (code === 0) {
+        log(`ok: ${binary} (${cmd.join(" ")})`);
+        ok = true;
+        break;
+      }
+      log(`warn: ${cmd.join(" ")} exited ${code}`);
+    }
+    if (!ok) {
+      log(`fail: ${binary}`);
+      failed++;
+    }
+  }
+  if (failed > 0) log(`${failed} update(s) failed.`);
+  return failed > 0 ? 1 : 0;
+}
+
+/** Hard-close every agent pane in the live broadcast grid and delete its state file. */
+export async function runBroadcastClose(
+  workspace: string,
+  log: (msg: string) => void = console.log,
+): Promise<number> {
+  const saved = await loadState(workspace);
+  const slots = saved?.slots;
+  if (!slots || Object.keys(slots).length === 0) {
+    log("no broadcast grid to close.");
+    return 0;
+  }
+  if (!(await gridIsLive(slots))) {
+    await deleteState(workspace);
+    log("no broadcast grid to close.");
+    return 0;
+  }
+  log(`closing ${Object.keys(slots).length} agent pane(s) …`);
+  await Promise.all(Object.values(slots).map((s) => closeSurface(s).catch(() => {})));
+  await deleteState(workspace);
+  log("broadcast grid closed.");
+  return 0;
 }
 
 /** Is the saved grid still live? Probe one stored surface; a read failure means it is stale. */
@@ -397,7 +527,10 @@ export interface BroadcastContext {
 /** Run `comux all [text]`: ensure the grid is open (build or reuse), then broadcast text if any. */
 export async function runBroadcast(argv: string[], ctx: BroadcastContext): Promise<void> {
   const log = ctx.log ?? ((m: string) => console.log(m));
-  const { text, fresh } = parseBroadcastArgs(argv);
+  const { text, fresh, update, close } = parseBroadcastArgs(argv);
+  if (update || close) {
+    throw new Error("runBroadcast does not handle --update or --close");
+  }
   const config = await loadConfig();
   const hash = rosterHash(config.broadcast.roster);
 

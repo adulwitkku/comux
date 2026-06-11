@@ -124,9 +124,22 @@ Checkpoint — and runs the Agents **unconfined in a shared cwd** (the sandbox o
 apply). It is an advisory/compare playground, not autonomous orchestration; collisions between
 Agents writing the same files are the human's responsibility. The roster is edited via `/broadcast`
 in the TUI; when the roster changes, the next `comux all` rebuilds the grid automatically. `comux
-all` **reuses** a live grid; `comux all --new` forces a fresh one.
+all` **reuses** a live grid; `comux all --new` forces a fresh one. `comux all --close` tears down
+the live grid by hard-closing every agent pane tracked in the broadcast state file (not the caller
+pane or untracked padding cells), then deletes that state file; if no grid is live it no-ops with a
+warning. `comux all --update` runs **Broadcast update** for the roster — it does not require cmux
+or a live grid. `--new`, `--close`, and `--update` are mutually exclusive with each other and with
+broadcast text. Distinct from `comux update`, which refreshes the Harness itself.
 _Avoid_: Dispatch (a Dispatch is a single routed task through a chain; a Broadcast is the
 opposite — unrouted, to everyone at once)
+
+**Broadcast update**:
+The `--update` action on `comux all`. Deterministic code walks the **enabled Broadcast roster**,
+dedupes by CLI **binary** (four opencode slots → one update), skips binaries not on PATH, and runs
+each slot's mapped package-manager command from a hardcoded registry (brew-first; npm where the
+Agent is commonly installed that way). Failures on one binary do not stop the rest; a summary is
+printed and the command exits non-zero if any update failed. It does not send anything into agent
+TUIs and does not refresh comux itself.
 
 **Equal grid**:
 The Broadcast layout rule. The caller's terminal is counted as one cell, so for `a` agents there

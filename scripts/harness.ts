@@ -6,7 +6,7 @@
 // new cmux pane, then git-checkpoints the result in the workspace.
 //
 //   comux                  # workspace = $COMUX_WORKSPACE or ./workspace (under the current dir)
-//   comux all [--new] [text]  # Broadcast: open the configured roster (equal grid); send text to all
+//   comux all [--new|--update|--close] [text]  # Broadcast: roster grid; action flags are exclusive
 //   comux --version | --help
 //
 // In the TUI:  type to chat · "/" commands · "@" file mentions · alt+⏎ newline · ⏎ run · ctrl+c exit
@@ -15,7 +15,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { identifySelf, identifyContext, closeSurface, findResultSurface, openMarkdown, openFile, renameTab, type SurfaceRef } from "../src/cmux.ts";
-import { runBroadcast, parseBroadcastArgs } from "../src/broadcast.ts";
+import { runBroadcast, parseBroadcastArgs, runBroadcastUpdate, runBroadcastClose } from "../src/broadcast.ts";
 import { runUpdate } from "../src/update.ts";
 import { runWorkspaceCommand } from "../src/workspace-save.ts";
 import { ensureWorkspace, readPlan, currentBranch, listFiles, clearChatFiles, listComuxFiles } from "../src/workspace.ts";
@@ -50,7 +50,7 @@ if (args.includes("--help") || args.includes("-h")) {
       "",
       "Usage:",
       "  comux               launch the TUI (workspace: $COMUX_WORKSPACE or current directory)",
-      "  comux all [--new] [text]  Broadcast: open the configured roster (equal grid); send text to all",
+      "  comux all [--new|--update|--close] [text]  Broadcast: roster grid; send text to all",
       "  comux update [--dev]  brew upgrade (or sync latest master with --dev)",
       "  comux save [name|ref] [-o file]  save current (or named) cmux workspace to disk",
       "  comux load <name> [--name title] [--focus]  restore a saved workspace",
@@ -81,14 +81,28 @@ if (args[0] === "update") {
   process.exit(0);
 }
 
-// `comux all [--cwd DIR] [--new] [text...]` — Broadcast mode (ADR-0014/0021): open each enabled
-// roster slot in an equal-sized grid (with its model) and send the same text to all. Manual,
-// unconfined fan-out that bypasses the orchestrator entirely, so it is handled here before the TUI
-// path. `--new` rebuilds the grid instead of reusing a live one.
+// `comux all [--cwd DIR] [--new|--update|--close] [text...]` — Broadcast mode (ADR-0014/0021).
+// `--update` runs package-manager refreshes without cmux; `--close` tears down the live grid.
 if (args[0] === "all") {
   const rest = args.slice(1);
-  const { cwd: cwdFlag } = parseBroadcastArgs(rest);
-  const cwd = cwdFlag ?? process.env.COMUX_WORKSPACE ?? process.cwd();
+  let parsed: ReturnType<typeof parseBroadcastArgs>;
+  try {
+    parsed = parseBroadcastArgs(rest);
+  } catch (e) {
+    console.error(`error: ${(e as Error).message}`);
+    process.exit(2);
+  }
+
+  if (parsed.update) {
+    process.exit(await runBroadcastUpdate());
+  }
+
+  if (parsed.close) {
+    const { workspace } = await identifyContext();
+    process.exit(await runBroadcastClose(workspace));
+  }
+
+  const cwd = parsed.cwd ?? process.env.COMUX_WORKSPACE ?? process.cwd();
   const { surface, workspace } = await identifyContext();
   await runBroadcast(rest, { origin: surface, workspace, cwd });
   process.exit(0);
