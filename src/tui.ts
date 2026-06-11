@@ -38,6 +38,40 @@ export function visibleWidth(s: string): number {
   return w;
 }
 
+/** Truncate `s` to `maxW` visible columns; ANSI sequences are preserved. */
+export function fitToWidth(s: string, maxW: number): string {
+  if (maxW <= 0 || visibleWidth(s) <= maxW) return s;
+  let vis = 0;
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === "\x1b") {
+      let j = i + 1;
+      if (s[j] === "[") {
+        j++;
+        while (j < s.length && !/[A-Za-z~]/.test(s[j]!)) j++;
+        j++;
+      } else j++;
+      i = j;
+      continue;
+    }
+    const ch = s[i]!;
+    const w = COMBINING.test(ch) ? 0 : 1;
+    if (vis + w > maxW - 1) break;
+    vis += w;
+    i++;
+  }
+  return s.slice(0, i) + c.gray("…");
+}
+
+/** Erase a prior frame: cursor is on `cursorRow` (0-based); frame was `rows` lines tall. */
+export function eraseFrame(rows: number, cursorRow: number): string {
+  if (rows <= 0) return "\r\x1b[J";
+  const down = rows - 1 - cursorRow;
+  let out = down > 0 ? `\x1b[${down}B` : "";
+  out += `\x1b[${rows - 1}A\r\x1b[J`;
+  return out;
+}
+
 /** Build dropdown rows for pre-filtered `items` + selection, windowed to `maxRows` (pure). */
 export function formatPalette(items: Item[], sel: number, maxRows = 8): string[] {
   if (!items.length) return [];
@@ -293,6 +327,7 @@ export class Tui {
       let cur = 0;
       let sel = 0;
       let first = true;
+      let lastFrameRows = 0;
       let lastCursorRow = 0;
       let files: string[] | null = null;
       let histIdx: number | null = null;
@@ -330,19 +365,21 @@ export class Tui {
       const render = () => {
         const list = items();
         if (sel >= list.length) sel = Math.max(0, list.length - 1);
+        const termW = Math.max(20, process.stdout.columns || frameWidth());
         const frame = buildFrame(
           layoutBuffer(buf, cur, textW()),
-          statusLine,
+          fitToWidth(statusLine, termW),
           formatPalette(list, sel),
           frameWidth(),
         );
-        let out = !first && lastCursorRow > 0 ? `\x1b[${lastCursorRow}A` : "";
-        out += "\r\x1b[J" + frame.text;
+        let out = !first ? eraseFrame(lastFrameRows, lastCursorRow) : "\r\x1b[J";
+        out += frame.text;
         const up = frame.totalRows - 1 - frame.cursorRow;
         if (up > 0) out += `\x1b[${up}A`;
         out += "\r";
         if (frame.cursorCol > 0) out += `\x1b[${frame.cursorCol}C`;
         process.stdout.write(out);
+        lastFrameRows = frame.totalRows;
         lastCursorRow = frame.cursorRow;
         first = false;
       };
@@ -357,8 +394,7 @@ export class Tui {
       const finish = (val: string | null) => {
         done = true;
         // Replace the frame with a compact transcript of what was submitted.
-        let out = lastCursorRow > 0 ? `\x1b[${lastCursorRow}A` : "";
-        out += "\r\x1b[J";
+        let out = eraseFrame(lastFrameRows, lastCursorRow);
         const logical = buf.split("\n");
         out += PROMPT + (logical[0] ?? "") + "\n";
         for (const l of logical.slice(1)) out += "  " + l + "\n";
