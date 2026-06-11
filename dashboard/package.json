@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start --port ${PORT:-62120}",
+    "dev": "bun server.ts",
+    "build": "bun --bun next build",
+    "start": "NODE_ENV=production bun server.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
