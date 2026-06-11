@@ -1,6 +1,6 @@
 {
   "name": "comux",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "description": "Local-first AI orchestrator that runs coding agents visibly inside cmux",
   "license": "MIT",
   "type": "module",
@@ -43,7 +43,10 @@
     "spike:m5": "bun run scripts/spike-m5.ts",
     "compare:pi": "bun run scripts/compare-pi.ts",
     "try": "bun run scripts/try.ts",
-    "typecheck": "tsc --noEmit"
+    "dashboard": "bun run scripts/harness.ts dashboard",
+    "dashboard:install": "bun install --cwd dashboard",
+    "typecheck": "tsc --noEmit",
+    "typecheck:dashboard": "cd dashboard && bun run typecheck"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -36,6 +36,9 @@ import {
   type Capability,
 } from "../src/config.ts";
 import { runSetup, detectAgents, type SetupResult } from "../src/setup.ts";
+import { acquireSurfaceLock, releaseSurfaceLock } from "../src/surface-lock.ts";
+import { createSay } from "../src/harness-say.ts";
+import { parseDashboardArgs, runDashboard } from "../src/dashboard-cli.ts";
 
 const args = process.argv.slice(2);
 
@@ -82,6 +85,7 @@ if (args.includes("--help") || args.includes("-h")) {
       "",
       "Usage:",
       "  comux               launch the TUI (workspace: $COMUX_WORKSPACE or current directory)",
+      "  comux dashboard [--gateway]  web UI on :62120 (comux dashboard --help)",
       "  comux all              Broadcast: open/reuse agent grid (comux all --help)",
       "  comux update [--dev]  brew upgrade comux (or sync latest master with --dev)",
       "  comux save [name|ref] [-o file]  save current (or named) cmux workspace to disk",
@@ -110,6 +114,31 @@ if (args.includes("--help") || args.includes("-h")) {
 
 // `comux update [--dev]` — refresh the install (brew upgrade, or sync master with --dev). No cmux
 // needed, so handle it before anything that touches the workspace or the cmux surface.
+if (args[0] === "dashboard") {
+  const rest = args.slice(1);
+  if (rest.includes("--help") || rest.includes("-h")) {
+    console.log(
+      [
+        "comux dashboard — web control surface (ADR-0023)",
+        "",
+        "Usage:",
+        "  comux dashboard            start Dashboard on port 62120 (default)",
+        "  comux dashboard --gateway  also start a cloudflared quick tunnel",
+        "",
+        "Environment:",
+        "  COMUX_WORKSPACE        workspace directory",
+        "  COMUX_DASHBOARD_PORT   listen port (default 62120)",
+        "  COMUX_DASHBOARD_GATEWAY  set to 1 when --gateway (requires token on all requests)",
+        "",
+        "Local http://127.0.0.1:<port> needs no token. Remote / gateway access uses the",
+        "persisted token in ~/.config/comux/dashboard.json (?token= or Bearer).",
+      ].join("\n"),
+    );
+    process.exit(0);
+  }
+  process.exit(await runDashboard(parseDashboardArgs(rest)));
+}
+
 if (args[0] === "update") {
   await runUpdate(args.slice(1));
   process.exit(0);
@@ -136,6 +165,18 @@ if (stray) {
 const workspace = await ensureWorkspace(
   process.env.COMUX_WORKSPACE ?? process.cwd(),
 );
+
+try {
+  await acquireSurfaceLock(workspace, "tui");
+} catch (e) {
+  console.error(`error: ${(e as Error).message}`);
+  process.exit(1);
+}
+const releaseLock = () => void releaseSurfaceLock(workspace);
+process.on("exit", releaseLock);
+process.on("SIGINT", releaseLock);
+process.on("SIGTERM", releaseLock);
+
 const selfSurface = await identifySelf();
 const envModel = process.env.COMUX_MODEL;
 let model = envModel ?? "gemma4:12b-mlx"; // refined from config.model below; switched via /model
@@ -234,7 +275,7 @@ const tui = new Tui({
   completeArg: (cmd, query) => registry.find((x) => x.name === cmd)?.complete?.(query) ?? [],
   historyPath: join(workspace, ".comux", "history"),
 });
-const say = (m: string) => tui.print(m);
+const say = createSay((m) => tui.print(m));
 
 const confirmPlan = async (_summary: string) =>
   autoYes ? true : tui.confirm("อนุมัติแผนนี้แล้วรันทั้งหมดเลยไหม?");

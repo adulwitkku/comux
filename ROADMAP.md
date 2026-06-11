@@ -155,10 +155,11 @@ On switch, the incoming Agent reads the repo + PLAN.md and resumes the failed St
 last commit, instructed to read files before editing and to satisfy that Step's frozen
 Acceptance check. No Orchestrator-from-memory briefing.
 
-### M6 — Rich web view (optional, later)
-If a file-explorer / image-rendering view is still wanted, build a Bun web app and open it
-as a cmux browser surface (`cmux browser open http://localhost:<port>`). Port is
-configurable, not hardcoded.
+### M6 — Dashboard (web control surface) — 🔨 in progress (ADR-0023)
+`comux dashboard` runs a Next.js + Elysia UI on port 62120 (default; `COMUX_DASHBOARD_PORT`).
+Alternate Harness surface sharing `runTurn` with the TUI; optional `--gateway` exposes a
+cloudflared quick tunnel (token-gated). Lives in `dashboard/`; core comux stays dependency-free.
+Agent quota/context columns stub **unknown** until M4 Cooldown lands.
 
 ## Design review round 2 — "it doesn't feel smart" (ADR-0015–0019)
 

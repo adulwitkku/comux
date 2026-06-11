@@ -185,3 +185,50 @@ proceeds, and a question takes its recommended option. With Bypass mode OFF the 
 auto-answers any decision that carries a recommended option, and escalates **only** a decision
 with no recommendation to the human.
 
+**Dashboard**:
+The Harness's **web control surface** — an alternate entry mode (`comux dashboard`) that runs the
+same deterministic loop as the terminal TUI (`runTurn`) but renders input and output in a browser
+on port 62120. It is a UI shell, not a second orchestrator: one Harness instance, one workspace,
+one active surface at a time. Distinct from the `chat` Capability (a kind of dispatched work) and
+from Grilling (structured Agent decisions — the Dashboard may *surface* those decisions as web
+prompts when Bypass mode is off, but it does not change what they are).
+_Avoid_: Web view (too vague — cmux's markdown viewer is also a web surface); Remote TUI (the
+Dashboard is not a mirror of the terminal; it is a first-class Harness surface)
+
+**Dashboard agent roster**:
+The deduped set of registry Agents referenced by the user's capability chains — the Agents the
+Harness may dispatch to. The Dashboard's Agent tab lists this roster (not the Broadcast roster,
+which bypasses orchestration). Quota, context-%, and Cooldown columns may read **unknown** until
+the Scheduler's rate-limit detection (M4) lands.
+
+**Dashboard token**:
+The shared secret that gates remote access to the Dashboard. Generated once and persisted in the
+user's comux config; passed on each request as a query parameter or `Authorization: Bearer` header.
+Access from the same machine (`127.0.0.1`) is ungated; any other origin (including a
+`--gateway` cloudflared URL) requires the token.
+
+**Dashboard gateway**:
+An optional exposure mode (`comux dashboard --gateway`) that starts the Dashboard on port 62120
+and a cloudflared **quick tunnel** (`*.trycloudflare.com`) as a child process — one command,
+foreground until Ctrl+C, no pm2 in v1. The public URL and `?token=` are printed on start. Always
+token-gated — distinct from merely binding the Dashboard to a non-loopback interface. Requires
+`cloudflared` on PATH.
+
+**Dashboard port**:
+The local TCP port the Dashboard listens on. Defaults to **62120**; overridable via
+`COMUX_DASHBOARD_PORT`. The gateway tunnel always targets this port on localhost.
+
+**Harness event**:
+A typed notification the Harness emits during a turn (`log`, `status`, `grill`, `turn_done`, …) —
+the same lines and phase changes the terminal TUI would print via `say()`. The Dashboard delivers
+these to the browser over SSE; token streaming from the Orchestrator is out of scope for v1. TUI and
+Dashboard share one `runTurn` path via a Harness event bus — each surface subscribes differently
+(terminal print vs SSE queue). Grilling decisions that would block on `tui.confirm` in the TUI
+block on a matching HTTP answer in the Dashboard. Periodic `agent_status` events on the same SSE
+stream refresh the Agent tab (~5s).
+
+**Surface lock**:
+The per-workspace exclusivity guarantee that only one Harness control surface (terminal TUI or
+Dashboard) may run at a time. A second launch on the same workspace is rejected immediately with
+which surface holds the lock — no `--force` steal. Different workspaces are independent.
+
