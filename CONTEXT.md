@@ -123,18 +123,20 @@ Orchestrator intent parse, no Capability/chain/Scheduler, no PLAN/Step/Acceptanc
 Checkpoint — and runs the Agents **unconfined in a shared cwd** (the sandbox of ADR-0005 does not
 apply). It is an advisory/compare playground, not autonomous orchestration; collisions between
 Agents writing the same files are the human's responsibility. The roster is edited via `/broadcast`
-in the TUI; when the roster changes, the next `comux all` rebuilds the grid automatically. `comux
-all` **reuses** a live grid; `comux all --new` forces a fresh one. `comux all --close` tears down
-the live grid by hard-closing every agent pane tracked in the broadcast state file (not the caller
-pane or untracked padding cells), then deletes that state file; if no grid is live it no-ops with a
-warning. `comux all --update` runs **Broadcast update** for the roster — it does not require cmux
-or a live grid. `--new`, `--close`, and `--update` are mutually exclusive with each other and with
-broadcast text. Distinct from `comux update`, which refreshes the Harness itself.
+in the TUI; when the roster changes, the next `comux all` rebuilds the grid automatically. CLI
+surface uses subcommands (pi-style): `comux all` opens or **reuses** a live grid without sending
+text; `comux all send "<text>"` broadcasts; `comux all new` forces a fresh grid; `comux all close`
+tears down the live grid by hard-closing every agent pane tracked in the broadcast state file (not
+the caller pane or untracked padding cells), then deletes that state file; `comux all update` runs
+**Broadcast update**. All agent panes share the caller's workspace (`$COMUX_WORKSPACE` or the
+current directory) — there is no per-invocation cwd override. Distinct from `comux update`, which
+refreshes the Harness itself.
 _Avoid_: Dispatch (a Dispatch is a single routed task through a chain; a Broadcast is the
-opposite — unrouted, to everyone at once)
+opposite — unrouted, to everyone at once); bare broadcast text on `comux all` (text requires
+`send`)
 
 **Broadcast update**:
-The `--update` action on `comux all`. Deterministic code walks the **enabled Broadcast roster**,
+The `update` subcommand on `comux all`. Deterministic code walks the **enabled Broadcast roster**,
 dedupes by CLI **binary** (four opencode slots → one update), skips binaries not on PATH, and runs
 each slot's mapped package-manager command from a hardcoded registry (brew-first; npm where the
 Agent is commonly installed that way). Failures on one binary do not stop the rest; a summary is

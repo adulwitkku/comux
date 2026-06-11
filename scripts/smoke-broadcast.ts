@@ -105,30 +105,52 @@ try {
   const st = await loadState("workspace:9");
   ok("loadState roundtrips slot→surface map", st?.slots["claude-sonnet"] === "surface:9" && st?.cwd === "/tmp/proj" && st?.rosterHash === hashA);
 
-  // --- Step 8: argv parsing (--cwd extracted, rest is the broadcast text) ---
-  ok("parse open-only", parseBroadcastArgs([]).text === "" && parseBroadcastArgs([]).cwd === null && parseBroadcastArgs([]).fresh === false);
-  ok("parse text", parseBroadcastArgs(["hi", "there"]).text === "hi there");
-  const p = parseBroadcastArgs(["--cwd", "/x", "hello"]);
-  ok("parse --cwd before text", p.cwd === "/x" && p.text === "hello");
-  const fp = parseBroadcastArgs(["--new", "hello", "world"]);
-  ok("parse --new flag (not part of text)", fp.fresh === true && fp.text === "hello world");
-  ok("parse --update", parseBroadcastArgs(["--update"]).update === true);
-  ok("parse --close", parseBroadcastArgs(["--close"]).close === true);
+  // --- Step 8: argv parsing (subcommands, ADR-0022) ---
+  ok("parse open-only", parseBroadcastArgs([]).action === "open" && parseBroadcastArgs([]).text === "");
+  ok("parse send", parseBroadcastArgs(["send", "hi", "there"]).action === "send" && parseBroadcastArgs(["send", "hi", "there"]).text === "hi there");
+  ok("parse new", parseBroadcastArgs(["new"]).action === "new");
+  ok("parse update", parseBroadcastArgs(["update"]).action === "update");
+  ok("parse close", parseBroadcastArgs(["close"]).action === "close");
 
   let threw = false;
   try {
-    parseBroadcastArgs(["--update", "--close"]);
-  } catch {
-    threw = true;
+    parseBroadcastArgs(["hello"]);
+  } catch (e) {
+    threw = (e as Error).message.includes('comux all send "hello"');
   }
-  ok("parse rejects --update + --close", threw);
+  ok("parse rejects bare text with send hint", threw);
+
   threw = false;
   try {
-    parseBroadcastArgs(["--update", "hello"]);
+    parseBroadcastArgs(["send"]);
   } catch {
     threw = true;
   }
-  ok("parse rejects --update with text", threw);
+  ok("parse rejects send without text", threw);
+
+  threw = false;
+  try {
+    parseBroadcastArgs(["--update"]);
+  } catch (e) {
+    threw = (e as Error).message.includes("comux all update");
+  }
+  ok("parse rejects legacy --update with hint", threw);
+
+  threw = false;
+  try {
+    parseBroadcastArgs(["--cwd", "/x", "hello"]);
+  } catch (e) {
+    threw = (e as Error).message.includes("--cwd was removed");
+  }
+  ok("parse rejects legacy --cwd", threw);
+
+  threw = false;
+  try {
+    parseBroadcastArgs(["new", "extra"]);
+  } catch {
+    threw = true;
+  }
+  ok("parse rejects new with extra args", threw);
 
   // --- Step 8b: unique roster binaries + update registry ---
   const uniq = uniqueEnabledBinaries(DEFAULT_BROADCAST_ROSTER);

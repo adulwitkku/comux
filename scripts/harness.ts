@@ -6,7 +6,7 @@
 // new cmux pane, then git-checkpoints the result in the workspace.
 //
 //   comux                  # workspace = $COMUX_WORKSPACE or ./workspace (under the current dir)
-//   comux all [--new|--update|--close] [text]  # Broadcast: roster grid; action flags are exclusive
+//   comux all [send|new|update|close]  # Broadcast: roster grid (see comux all --help)
 //   comux --version | --help
 //
 // In the TUI:  type to chat · "/" commands · "@" file mentions · alt+⏎ newline · ⏎ run · ctrl+c exit
@@ -15,7 +15,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { identifySelf, identifyContext, closeSurface, findResultSurface, openMarkdown, openFile, renameTab, type SurfaceRef } from "../src/cmux.ts";
-import { runBroadcast, parseBroadcastArgs, runBroadcastUpdate, runBroadcastClose } from "../src/broadcast.ts";
+import { runBroadcast, parseBroadcastArgs, runBroadcastUpdate, runBroadcastClose, BROADCAST_ALL_HELP } from "../src/broadcast.ts";
 import { runUpdate } from "../src/update.ts";
 import { runWorkspaceCommand } from "../src/workspace-save.ts";
 import { ensureWorkspace, readPlan, currentBranch, listFiles, clearChatFiles, listComuxFiles } from "../src/workspace.ts";
@@ -43,6 +43,38 @@ if (args.includes("--version") || args.includes("-v")) {
   console.log(`comux ${VERSION}`);
   process.exit(0);
 }
+
+// `comux all [send|new|update|close]` — before global --help so `comux all --help` works (ADR-0022).
+if (args[0] === "all") {
+  const rest = args.slice(1);
+  if (rest.includes("--help") || rest.includes("-h")) {
+    console.log(BROADCAST_ALL_HELP);
+    process.exit(0);
+  }
+
+  let parsed: ReturnType<typeof parseBroadcastArgs>;
+  try {
+    parsed = parseBroadcastArgs(rest);
+  } catch (e) {
+    console.error(`error: ${(e as Error).message}`);
+    process.exit(2);
+  }
+
+  if (parsed.action === "update") {
+    process.exit(await runBroadcastUpdate());
+  }
+
+  if (parsed.action === "close") {
+    const { workspace } = await identifyContext();
+    process.exit(await runBroadcastClose(workspace));
+  }
+
+  const cwd = process.env.COMUX_WORKSPACE ?? process.cwd();
+  const { surface, workspace } = await identifyContext();
+  await runBroadcast(parsed, { origin: surface, workspace, cwd });
+  process.exit(0);
+}
+
 if (args.includes("--help") || args.includes("-h")) {
   console.log(
     [
@@ -50,8 +82,8 @@ if (args.includes("--help") || args.includes("-h")) {
       "",
       "Usage:",
       "  comux               launch the TUI (workspace: $COMUX_WORKSPACE or current directory)",
-      "  comux all [--new|--update|--close] [text]  Broadcast: roster grid; send text to all",
-      "  comux update [--dev]  brew upgrade (or sync latest master with --dev)",
+      "  comux all              Broadcast: open/reuse agent grid (comux all --help)",
+      "  comux update [--dev]  brew upgrade comux (or sync latest master with --dev)",
       "  comux save [name|ref] [-o file]  save current (or named) cmux workspace to disk",
       "  comux load <name> [--name title] [--focus]  restore a saved workspace",
       "  comux list          list saved workspaces",
@@ -66,6 +98,8 @@ if (args.includes("--help") || args.includes("-h")) {
       "  OLLAMA_HOST       Ollama server URL (default: http://localhost:11434)",
       "  COMUX_YES         auto-approve the plan gate when Bypass mode is off (non-interactive)",
       "",
+      "In TUI: /broadcast roster · /settings chains · /model · /setup · /help",
+      "",
       "Needs a running cmux (with `cmux hooks setup` run — see /setup), Ollama serving the model,",
       "and an Agent CLI on PATH. Bypass mode (default on) auto-answers agent prompts; edit",
       "~/.config/comux/config.json to turn it off.",
@@ -78,33 +112,6 @@ if (args.includes("--help") || args.includes("-h")) {
 // needed, so handle it before anything that touches the workspace or the cmux surface.
 if (args[0] === "update") {
   await runUpdate(args.slice(1));
-  process.exit(0);
-}
-
-// `comux all [--cwd DIR] [--new|--update|--close] [text...]` — Broadcast mode (ADR-0014/0021).
-// `--update` runs package-manager refreshes without cmux; `--close` tears down the live grid.
-if (args[0] === "all") {
-  const rest = args.slice(1);
-  let parsed: ReturnType<typeof parseBroadcastArgs>;
-  try {
-    parsed = parseBroadcastArgs(rest);
-  } catch (e) {
-    console.error(`error: ${(e as Error).message}`);
-    process.exit(2);
-  }
-
-  if (parsed.update) {
-    process.exit(await runBroadcastUpdate());
-  }
-
-  if (parsed.close) {
-    const { workspace } = await identifyContext();
-    process.exit(await runBroadcastClose(workspace));
-  }
-
-  const cwd = parsed.cwd ?? process.env.COMUX_WORKSPACE ?? process.cwd();
-  const { surface, workspace } = await identifyContext();
-  await runBroadcast(rest, { origin: surface, workspace, cwd });
   process.exit(0);
 }
 
@@ -197,7 +204,7 @@ const registry: Command[] = [
   { name: "/model", desc: "pick the Orchestrator model (ollama)", run: runModelPicker },
   { name: "/setup", desc: "detect agents & write default chains", run: runSetupCmd },
   { name: "/settings", desc: "edit agent chains per capability", run: runSettingsPicker },
-  { name: "/broadcast", desc: "edit broadcast roster (comux all)", run: runBroadcastPicker },
+  { name: "/broadcast", desc: "edit broadcast roster (comux all send)", run: runBroadcastPicker },
   { name: "/agents", desc: "show capability chains", run: () => showAgents() },
   { name: "/plan", desc: "show PLAN.md", run: async () => say(c.gray(await readPlan(workspace))) },
   { name: "/ws", desc: "show workspace path", run: () => say(c.blue(`  ${workspace}`)) },
@@ -287,9 +294,11 @@ async function openComuxFile(filename: string, tabName: string, closeExisting: b
 }
 
 function runHelp(): void {
-  say(c.gray("  /model  orchestrator model · /settings  edit chains · /broadcast  edit roster · /setup  reset chains"));
-  say(c.gray("  /agents  view chains · /plan  PLAN.md · /new  new session · /open  view file · /ws · /exit"));
+  say(c.gray("  TUI: /model · /settings · /broadcast · /setup · /agents · /plan · /new · /open · /ws · /exit"));
   say(c.gray("  keys: alt+⏎ newline · ↑↓ palette/cursor/history · ⇥ complete · ctrl+a/e/u/k/w edit · alt+←→ word · esc clear"));
+  say("");
+  say(c.cyan("  Broadcast (CLI):"));
+  for (const line of BROADCAST_ALL_HELP.split("\n")) say(c.gray(`  ${line}`));
 }
 
 async function runNew(): Promise<void> {

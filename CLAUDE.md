@@ -31,6 +31,13 @@ bun run compare:pi    # local Orchestrator vs pi (cloud) as routers over 3 cases
 bun run try "msg"     # throw one message at the Orchestrator (add --pi to compare)
 ```
 
+### Release push (when asked to push / tag / release)
+
+`brew upgrade comux` only works after **both** repos are updated:
+
+1. **comux** — bump `src/version.ts` + `package.json`, commit, tag `vX.Y.Z`, push branch + tag.
+2. **homebrew-tap** — bump `Formula/comux.rb` (`url` + `sha256` for that tag), push `main`. Tap: `/opt/homebrew/Library/Taps/adulwitkku/homebrew-tap` (remote: `adulwitkku/homebrew-tap`). Verify with `brew fetch --force adulwitkku/tap/comux`.
+
 There is no unit-test framework or linter. Verification is `bun run typecheck` plus the
 smoke scripts, which require a running cmux + Ollama + the `pi` CLI on PATH.
 

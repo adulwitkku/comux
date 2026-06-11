@@ -353,54 +353,81 @@ export async function dispatchSend(
 // argv parsing + entrypoint                                                   //
 // --------------------------------------------------------------------------- //
 
+export type BroadcastAction = "open" | "send" | "new" | "update" | "close";
+
 export interface BroadcastArgs {
-  /** Text to broadcast; empty string means open-only. */
+  action: BroadcastAction;
+  /** Broadcast text (`send` only). */
   text: string;
-  /** Optional cwd override from `--cwd`. */
-  cwd: string | null;
-  /** `--new`: tear down any reusable grid and build a fresh one. */
-  fresh: boolean;
-  /** `--update`: run package-manager updates for roster binaries (no cmux grid needed). */
-  update: boolean;
-  /** `--close`: hard-close agent panes tracked in the broadcast state file. */
-  close: boolean;
 }
 
-/** Parse the args after the `all` subcommand: `[--cwd DIR] [--new|--update|--close] [text...]`. */
+const BROADCAST_SUBCOMMANDS = new Set(["send", "new", "update", "close"]);
+
+/** Help text for `comux all --help` (also mirrored in the TUI `/help`). */
+export const BROADCAST_ALL_HELP = [
+  "Usage:",
+  "  comux all              Open or reuse the broadcast grid (no text)",
+  "  comux all send <text>  Broadcast text to all enabled roster slots",
+  "  comux all new          Rebuild the grid from scratch",
+  "  comux all update       Update agent CLIs (brew/npm)",
+  "  comux all close        Tear down the live grid",
+  "",
+  "Roster: edit in TUI with /broadcast",
+  "Workspace: $COMUX_WORKSPACE or current directory",
+].join("\n");
+
+/** Parse argv after `comux all` into a subcommand (ADR-0022). */
 export function parseBroadcastArgs(argv: string[]): BroadcastArgs {
-  let cwd: string | null = null;
-  let fresh = false;
-  let update = false;
-  let close = false;
-  const rest: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
-    if (arg === "--cwd") {
-      cwd = argv[++i] ?? null;
-    } else if (arg === "--new" || arg === "-n") {
-      fresh = true;
-    } else if (arg === "--update") {
-      update = true;
-    } else if (arg === "--close") {
-      close = true;
-    } else {
-      rest.push(arg);
-    }
+  if (argv.length === 0) return { action: "open", text: "" };
+
+  const head = argv[0]!;
+  if (head.startsWith("-")) return rejectLegacyFlag(head);
+
+  if (!BROADCAST_SUBCOMMANDS.has(head)) {
+    throw new Error(
+      `comux all: unknown subcommand '${head}' — did you mean \`comux all send "${head}"\`? See \`comux all --help\``,
+    );
   }
-  const parsed = { text: rest.join(" ").trim(), cwd, fresh, update, close };
-  validateBroadcastArgs(parsed);
-  return parsed;
+
+  const rest = argv.slice(1);
+  switch (head) {
+    case "send": {
+      const text = rest.join(" ").trim();
+      if (!text) {
+        throw new Error('comux all send: missing text — usage: comux all send "<text>"');
+      }
+      return { action: "send", text };
+    }
+    case "new":
+      if (rest.length > 0) throw new Error("comux all new: does not accept extra arguments");
+      return { action: "new", text: "" };
+    case "update":
+      if (rest.length > 0) throw new Error("comux all update: does not accept extra arguments");
+      return { action: "update", text: "" };
+    case "close":
+      if (rest.length > 0) throw new Error("comux all close: does not accept extra arguments");
+      return { action: "close", text: "" };
+    default:
+      throw new Error(`comux all: unknown subcommand '${head}' — see \`comux all --help\``);
+  }
 }
 
-/** Action flags on `comux all` are mutually exclusive and do not take broadcast text. */
-export function validateBroadcastArgs(args: BroadcastArgs): void {
-  const actions = [args.fresh, args.update, args.close].filter(Boolean).length;
-  if (actions > 1) {
-    throw new Error("comux all: --new, --update, and --close are mutually exclusive");
+function rejectLegacyFlag(flag: string): never {
+  if (flag === "--new" || flag === "-n") {
+    throw new Error("comux all: use `comux all new` (not --new)");
   }
-  if ((args.update || args.close) && args.text) {
-    throw new Error("comux all: --update and --close do not accept broadcast text");
+  if (flag === "--update") {
+    throw new Error("comux all: use `comux all update` (not --update)");
   }
+  if (flag === "--close") {
+    throw new Error("comux all: use `comux all close` (not --close)");
+  }
+  if (flag === "--cwd") {
+    throw new Error(
+      "comux all: --cwd was removed — agents share $COMUX_WORKSPACE or the current directory",
+    );
+  }
+  throw new Error(`comux all: unknown flag '${flag}' — see \`comux all --help\``);
 }
 
 /** Unique CLI binaries from enabled roster slots, in roster order. */
@@ -524,13 +551,14 @@ export interface BroadcastContext {
   log?: (msg: string) => void;
 }
 
-/** Run `comux all [text]`: ensure the grid is open (build or reuse), then broadcast text if any. */
-export async function runBroadcast(argv: string[], ctx: BroadcastContext): Promise<void> {
+/** Run `comux all` grid open/send/new: ensure the grid is open, then broadcast text on `send`. */
+export async function runBroadcast(args: BroadcastArgs, ctx: BroadcastContext): Promise<void> {
   const log = ctx.log ?? ((m: string) => console.log(m));
-  const { text, fresh, update, close } = parseBroadcastArgs(argv);
-  if (update || close) {
-    throw new Error("runBroadcast does not handle --update or --close");
+  if (args.action === "update" || args.action === "close") {
+    throw new Error("runBroadcast does not handle update or close");
   }
+  const fresh = args.action === "new";
+  const text = args.action === "send" ? args.text : "";
   const config = await loadConfig();
   const hash = rosterHash(config.broadcast.roster);
 
@@ -540,11 +568,11 @@ export async function runBroadcast(argv: string[], ctx: BroadcastContext): Promi
     return;
   }
 
-  // `--new` tears down a still-live grid so a fresh one isn't stacked on top of the old panes.
+  // `new` tears down a still-live grid so a fresh one isn't stacked on top of the old panes.
   if (fresh) {
     const old = await loadState(ctx.workspace);
     if (old?.slots && (await gridIsLive(old.slots))) {
-      log("closing existing grid (--new) …");
+      log("closing existing grid (new) …");
       await Promise.all(Object.values(old.slots).map((s) => closeSurface(s).catch(() => {})));
     }
   }
