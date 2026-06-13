@@ -138,6 +138,15 @@ interface CodexRateWindow {
 
 interface CodexTokenCountPayload {
   type?: string;
+  info?: {
+    total_token_usage?: {
+      total_tokens?: number | null;
+    } | null;
+    last_token_usage?: {
+      input_tokens?: number | null;
+    } | null;
+    model_context_window?: number | null;
+  } | null;
   rate_limits?: {
     primary?: CodexRateWindow | null;
     secondary?: CodexRateWindow | null;
@@ -198,27 +207,42 @@ function codexWindow(raw: CodexRateWindow | null | undefined): QuotaWindowSnapsh
   return { usedPct, resetIn: lapsed ? null : resetIn };
 }
 
+function codexContextPct(info: CodexTokenCountPayload["info"]): number | null {
+  const inputTokens = info?.last_token_usage?.input_tokens;
+  const contextWindow = info?.model_context_window;
+  if (
+    inputTokens == null ||
+    contextWindow == null ||
+    !Number.isFinite(inputTokens) ||
+    !Number.isFinite(contextWindow) ||
+    contextWindow <= 0
+  ) {
+    return null;
+  }
+  return Math.min(100, Math.max(0, Math.round((inputTokens / contextWindow) * 100)));
+}
+
 /** Extract the last `token_count.rate_limits` entry from a session's JSONL lines. */
 function parseCodexSession(raw: string): QuotaSnapshot {
-  let latest: CodexTokenCountPayload["rate_limits"] | null = null;
+  let latest: CodexTokenCountPayload | null = null;
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || !trimmed.includes("token_count")) continue;
     try {
       const evt = JSON.parse(trimmed) as { payload?: CodexTokenCountPayload };
       const p = evt.payload;
-      if (p?.type === "token_count" && p.rate_limits) latest = p.rate_limits;
+      if (p?.type === "token_count" && (p.rate_limits || p.info)) latest = p;
     } catch {
       // tolerate a truncated/partial final line.
     }
   }
 
-  const fiveHour = codexWindow(latest?.primary);
-  const sevenDay = codexWindow(latest?.secondary);
-  // Codex exposes no context-window total, so contextPct stays null (Context column shows —).
-  const hasAny = fiveHour != null || sevenDay != null;
+  const contextPct = codexContextPct(latest?.info ?? null);
+  const fiveHour = codexWindow(latest?.rate_limits?.primary);
+  const sevenDay = codexWindow(latest?.rate_limits?.secondary);
+  const hasAny = contextPct != null || fiveHour != null || sevenDay != null;
   return {
-    contextPct: null,
+    contextPct,
     fiveHour,
     sevenDay,
     ...(hasAny ? {} : { noData: true }),

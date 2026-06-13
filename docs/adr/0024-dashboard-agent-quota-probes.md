@@ -53,13 +53,16 @@ The probe walks sessions under `~/.codex/sessions/**/*.jsonl` newest-first by mt
 first that carries a `token_count.rate_limits` entry — the newest session is often one comux just
 opened for lifecycle (no turn yet, no usage), so stopping at it would wrongly report "no data".
 It takes that session's **last** entry and maps `primary` → 5h, `secondary` → 7d (`used_percent`
-→ `usedPct`, `resets_at` → `resetIn`); the scan is capped at the 20 most recent sessions. No
-config tee is required — this works on an unmodified Codex install.
+→ `usedPct`, `resets_at` → `resetIn`). When the event also carries
+`info.last_token_usage.input_tokens` and `info.model_context_window`, the probe computes Codex
+Context as `input_tokens / model_context_window`; older Codex session entries without that
+metadata keep Context at **—**. The scan is capped at the 20 most recent sessions. No config tee
+is required — this works on an unmodified Codex install.
 
 Because this is a **snapshot from the last turn** (not live like the tee probes), a window's
 `used_percent` goes stale once its `resets_at` passes. The probe therefore reports **0%** for any
 window whose `resets_at` is in the past — Codex resets on that schedule, so a lapsed window is
-empty. Codex exposes no context-window total, so its Context column stays **—**.
+empty.
 
 ## API shape
 
