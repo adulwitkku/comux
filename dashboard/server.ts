@@ -19,7 +19,11 @@ const nextProc = Bun.spawn(nextCmd, {
   stdout: "inherit",
   stderr: "inherit",
   stdin: "inherit",
-  env: process.env,
+  env: {
+    ...process.env,
+    NEXT_PUBLIC_COMUX_API_PORT: String(mainPort),
+    NEXT_PUBLIC_COMUX_DASHBOARD_TOKEN: process.env.COMUX_DASHBOARD_TOKEN ?? "",
+  },
 });
 
 async function waitForNext(port: number, timeoutMs = 60_000): Promise<void> {

@@ -20,6 +20,17 @@ export const apiApp = new Elysia({ prefix: "/api" })
     const s = await getDashboardSession();
     return s.statusSnapshot();
   })
+  .get("/agents", async ({ request }) => {
+    if (!authGuard(request)) return unauthorized();
+    const s = await getDashboardSession();
+    const agents = await s.getAgentRows();
+    return { agents, refreshedAt: s.getLastQuotaRefreshAt() };
+  })
+  .post("/agents/refresh", async ({ request }) => {
+    if (!authGuard(request)) return unauthorized();
+    const s = await getDashboardSession();
+    return s.refreshAgentQuotas();
+  })
   .get("/commands", ({ request }) => {
     if (!authGuard(request)) return unauthorized();
     return {

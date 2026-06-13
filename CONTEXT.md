@@ -198,8 +198,21 @@ Dashboard is not a mirror of the terminal; it is a first-class Harness surface)
 **Dashboard agent roster**:
 The deduped set of registry Agents referenced by the user's capability chains — the Agents the
 Harness may dispatch to. The Dashboard's Agent tab lists this roster (not the Broadcast roster,
-which bypasses orchestration). Quota, context-%, and Cooldown columns may read **unknown** until
-the Scheduler's rate-limit detection (M4) lands.
+which bypasses orchestration). Lifecycle and PATH refresh automatically; quota/context numbers
+come from an on-demand **Quota snapshot** via **Agent quota probe** (display-only — they do not
+mark Cooldown or change the Scheduler).
+
+**Agent quota probe**:
+A headless, read-only check registered per Agent that snapshots context-window usage and
+rate-limit windows (5h / 7d when exposed) without opening a visible interactive TUI. Agents
+without a registered probe show **—**; probe failure surfaces an error on that row. Probes read
+cached data only — they do not send prompts to wake usage counters.
+
+**Quota snapshot**:
+The Dashboard's point-in-time result for one Agent after a probe: context %, short-window usage
+(5h), weekly usage (7d), and reset times when available. Collected on **Refresh** (parallel,
+per-row timeout); **Last refreshed** and per-row errors are shown. Display-only — distinct from
+**Cooldown**, which marks an Agent unavailable for dispatch.
 
 **Dashboard token**:
 The shared secret that gates remote access to the Dashboard. Generated once and persisted in the

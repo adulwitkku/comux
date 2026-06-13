@@ -2,11 +2,11 @@
 
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
-import { identifySelf, findResultSurface, closeSurface, openMarkdown, openFile, renameTab } from "@comux/cmux.ts";
+import { identifySelf, findResultSurface, closeSurface, openMarkdown, openFile, renameTab, type SurfaceRef } from "@comux/cmux.ts";
 import { runTurn } from "@comux/harness.ts";
 import { harnessBus, type HarnessEvent, type GrillKind } from "@comux/harness-events.ts";
 import { createSay } from "@comux/harness-say.ts";
-import { collectAgentStatus } from "@comux/agent-roster.ts";
+import { collectAgentStatus, refreshAgentQuotas, type AgentQuotaView, type AgentStatusRow } from "@comux/agent-roster.ts";
 import { loadConfig, configExists, type Config, type Capability } from "@comux/config.ts";
 import { runSetup, detectAgents } from "@comux/setup.ts";
 import { startFeedWatcher } from "@comux/feed.ts";
@@ -33,7 +33,7 @@ export interface StatusSnapshot {
 export class DashboardSession {
   readonly workspace: string;
   readonly config: Config;
-  readonly selfSurface: Awaited<ReturnType<typeof identifySelf>>;
+  private selfSurface: SurfaceRef | null = null;
   private readonly say: (msg: string) => void;
   private readonly feed: ReturnType<typeof startFeedWatcher>;
   private readonly pending = new Map<string, PendingGrill>();
@@ -41,15 +41,12 @@ export class DashboardSession {
   private agentTimer: ReturnType<typeof setInterval> | null = null;
   private sseClients = new Set<(event: HarnessEvent) => void>();
   private busHooked = false;
+  private quotaByAgent = new Map<string, AgentQuotaView>();
+  private lastQuotaRefreshAt: number | null = null;
 
-  private constructor(
-    workspace: string,
-    config: Config,
-    selfSurface: Awaited<ReturnType<typeof identifySelf>>,
-  ) {
+  private constructor(workspace: string, config: Config) {
     this.workspace = workspace;
     this.config = config;
-    this.selfSurface = selfSurface;
     this.say = createSay(() => {});
     this.feed = startFeedWatcher({ bypass: config.bypass, say: this.say });
     this.agentTimer = setInterval(() => void this.pushAgentStatus(), 5000);
@@ -67,8 +64,12 @@ export class DashboardSession {
     const model = envModel ?? config.model ?? "gemma4:12b-mlx";
     if (!envModel && config.model) setDefaultModel(config.model);
     else setDefaultModel(model);
-    const selfSurface = await identifySelf();
-    return new DashboardSession(workspace, config, selfSurface);
+    return new DashboardSession(workspace, config);
+  }
+
+  private async getSelfSurface(): Promise<SurfaceRef> {
+    if (!this.selfSurface) this.selfSurface = await identifySelf();
+    return this.selfSurface;
   }
 
   subscribeSse(send: (event: HarnessEvent) => void): () => void {
@@ -103,8 +104,24 @@ export class DashboardSession {
   }
 
   async pushAgentStatus(): Promise<void> {
-    const agents = await collectAgentStatus(this.config, this.workspace);
+    const agents = await this.getAgentRows();
     harnessBus.emit({ type: "agent_status", agents, ts: Date.now() });
+  }
+
+  async getAgentRows(): Promise<AgentStatusRow[]> {
+    return collectAgentStatus(this.config, this.workspace, this.quotaByAgent);
+  }
+
+  async refreshAgentQuotas(): Promise<{ agents: AgentStatusRow[]; refreshedAt: number }> {
+    const result = await refreshAgentQuotas(this.config, this.workspace);
+    this.quotaByAgent = new Map(result.agents.map((a) => [a.name, a.quota]));
+    this.lastQuotaRefreshAt = result.refreshedAt;
+    harnessBus.emit({ type: "agent_status", agents: result.agents, ts: result.refreshedAt });
+    return result;
+  }
+
+  getLastQuotaRefreshAt(): number | null {
+    return this.lastQuotaRefreshAt;
   }
 
   resolveGrill(id: string, answer: boolean | number): boolean {
@@ -222,8 +239,8 @@ export class DashboardSession {
     const IMAGE = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
     try {
       const surface = IMAGE.has(ext)
-        ? await openFile(filePath, { surface: this.selfSurface })
-        : await openMarkdown(filePath, { surface: this.selfSurface });
+        ? await openFile(filePath, { surface: await this.getSelfSurface() })
+        : await openMarkdown(filePath, { surface: await this.getSelfSurface() });
       if (surface) {
         await renameTab(surface, closeExisting ? "comux-result" : basename(filename)).catch(() => {});
         this.say(ui.ok(`เปิด ${filename} ใน viewer`));
@@ -249,7 +266,7 @@ export class DashboardSession {
     try {
       await runTurn(line, {
         workspace: this.workspace,
-        selfSurface: this.selfSurface,
+        selfSurface: await this.getSelfSurface(),
         config: this.config,
         confirmPlan: this.confirmPlan,
         chooseCapability: this.chooseCapability,

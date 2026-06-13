@@ -3,17 +3,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { ContextPct, QuotaBar } from "@/components/quota-bar";
 import { authHeaders, getDashboardToken } from "@/lib/utils";
+
+interface QuotaWindow {
+  usedPct: number | null;
+  resetIn: string | null;
+}
+
+interface AgentQuota {
+  contextPct: number | null;
+  fiveHour: QuotaWindow | null;
+  sevenDay: QuotaWindow | null;
+  noData: boolean;
+  probeError: string | null;
+}
 
 interface AgentRow {
   name: string;
   binary: string;
   installed: boolean;
   lifecycle: string;
-  quota: string;
-  contextPct: string;
-  quota5h: string;
-  quotaWeekly: string;
+  quota: AgentQuota;
 }
 
 type HarnessEvent =
@@ -56,6 +67,8 @@ export function DashboardApp() {
   const [phase, setPhase] = useState("idle");
   const [status, setStatus] = useState<StatusSnapshot | null>(null);
   const [agents, setAgents] = useState<AgentRow[]>([]);
+  const [agentsRefreshing, setAgentsRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
   const [grill, setGrill] = useState<Extract<HarnessEvent, { type: "grill" }> | null>(null);
   const [busy, setBusy] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
@@ -80,6 +93,29 @@ export function DashboardApp() {
     });
   }, []);
 
+  const refreshAgents = useCallback(async () => {
+    const r = await apiFetch("/api/agents");
+    if (r.ok) {
+      const data = (await r.json()) as { agents: AgentRow[]; refreshedAt: number | null };
+      setAgents(data.agents);
+      if (data.refreshedAt) setLastRefreshedAt(data.refreshedAt);
+    }
+  }, [apiFetch]);
+
+  const probeAgents = useCallback(async () => {
+    setAgentsRefreshing(true);
+    try {
+      const r = await apiFetch("/api/agents/refresh", { method: "POST" });
+      if (r.ok) {
+        const data = (await r.json()) as { agents: AgentRow[]; refreshedAt: number };
+        setAgents(data.agents);
+        setLastRefreshedAt(data.refreshedAt);
+      }
+    } finally {
+      setAgentsRefreshing(false);
+    }
+  }, [apiFetch]);
+
   useEffect(() => {
     void apiFetch("/api/status").then(async (r) => {
       if (r.ok) setStatus((await r.json()) as StatusSnapshot);
@@ -90,7 +126,12 @@ export function DashboardApp() {
         setSlashItems(data.commands);
       }
     });
-  }, [apiFetch]);
+    void refreshAgents();
+  }, [apiFetch, refreshAgents]);
+
+  useEffect(() => {
+    if (tab === "agents") void refreshAgents();
+  }, [tab, refreshAgents]);
 
   useEffect(() => {
     const token = getDashboardToken();
@@ -279,7 +320,24 @@ export function DashboardApp() {
           </>
         ) : (
           <div className="flex-1 overflow-auto p-4">
-            <h2 className="mb-3 text-lg font-medium">Agent roster (chains)</h2>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-medium">Agent roster (chains)</h2>
+              <div className="flex items-center gap-3">
+                {lastRefreshedAt != null && (
+                  <span className="text-xs text-zinc-500">
+                    Last refreshed {new Date(lastRefreshedAt).toLocaleString()}
+                  </span>
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={agentsRefreshing}
+                  onClick={() => void probeAgents()}
+                >
+                  {agentsRefreshing ? "Refreshing…" : "Refresh quotas"}
+                </Button>
+              </div>
+            </div>
             <table className="w-full text-left text-sm">
               <thead className="text-zinc-500">
                 <tr className="border-b border-zinc-800">
@@ -288,27 +346,56 @@ export function DashboardApp() {
                   <th className="py-2 pr-4">PATH</th>
                   <th className="py-2 pr-4">Lifecycle</th>
                   <th className="py-2 pr-4">Context</th>
-                  <th className="py-2 pr-4">5h / week</th>
+                  <th className="py-2 pr-4">5h</th>
+                  <th className="py-2 pr-4">7d</th>
                 </tr>
               </thead>
               <tbody>
                 {agents.map((a) => (
-                  <tr key={a.name} className="border-b border-zinc-900">
+                  <tr key={a.name} className="border-b border-zinc-900 align-top">
                     <td className="py-2 pr-4 font-mono">{a.name}</td>
                     <td className="py-2 pr-4 text-zinc-400">{a.binary}</td>
                     <td className="py-2 pr-4">{a.installed ? "✓" : "✗"}</td>
                     <td className="py-2 pr-4">{a.lifecycle}</td>
-                    <td className="py-2 pr-4 text-zinc-500">{a.contextPct}</td>
-                    <td className="py-2 pr-4 text-zinc-500">
-                      {a.quota5h} / {a.quotaWeekly}
+                    <td className="py-2 pr-4">
+                      <ContextPct pct={a.quota.contextPct} noData={a.quota.noData} />
+                    </td>
+                    <td className="py-2 pr-4">
+                      <QuotaBar
+                        usedPct={a.quota.fiveHour?.usedPct ?? null}
+                        resetIn={a.quota.fiveHour?.resetIn}
+                        noData={a.quota.noData}
+                      />
+                    </td>
+                    <td className="py-2 pr-4">
+                      <QuotaBar
+                        usedPct={a.quota.sevenDay?.usedPct ?? null}
+                        resetIn={a.quota.sevenDay?.resetIn}
+                        noData={a.quota.noData}
+                      />
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            {agents.some((a) => a.quota.probeError) && (
+              <div className="mt-3 space-y-1 text-xs text-red-400">
+                {agents
+                  .filter((a) => a.quota.probeError)
+                  .map((a) => (
+                    <div key={a.name}>
+                      {a.name}: {a.quota.probeError}
+                    </div>
+                  ))}
+              </div>
+            )}
             {!agents.length && (
               <p className="text-sm text-zinc-500">Waiting for agent_status events…</p>
             )}
+            <p className="mt-4 text-xs text-zinc-600">
+              Lifecycle และ PATH อัปเดตอัตโนมัติทุก ~5s. Quota/context อัปเดตเมื่อกด Refresh — v1 มี probe
+              สำหรับ cursor เท่านั้น (อ่าน cache จาก statusline; ไม่ยิง prompt)
+            </p>
           </div>
         )}
       </main>

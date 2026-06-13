@@ -12,7 +12,11 @@ export function getDashboardToken(): string | null {
     sessionStorage.setItem("comux-dashboard-token", q);
     return q;
   }
-  return sessionStorage.getItem("comux-dashboard-token");
+  const stored = sessionStorage.getItem("comux-dashboard-token");
+  if (stored) return stored;
+  // Next dev (:PORT+1) often opens without ?token=; token was injected at spawn time.
+  const embedded = process.env.NEXT_PUBLIC_COMUX_DASHBOARD_TOKEN;
+  return embedded || null;
 }
 
 export function authHeaders(): HeadersInit {

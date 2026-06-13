@@ -1,6 +1,8 @@
 // Thin wrapper over the `cmux` CLI. Every shape here was validated against the
 // real CLI in this environment before being written (see ROADMAP M1).
 
+import { existsSync } from "node:fs";
+
 export type SurfaceRef = `surface:${number}`;
 export type PaneRef = `pane:${number}`;
 export type Direction = "left" | "right" | "up" | "down";
@@ -16,8 +18,17 @@ export interface PaneInfo {
   surfaceRefs: SurfaceRef[];
 }
 
+function cmuxBin(): string {
+  if (process.env.CMUX_BIN) return process.env.CMUX_BIN;
+  const onPath = Bun.which("cmux");
+  if (onPath) return onPath;
+  const bundled = "/Applications/cmux.app/Contents/Resources/bin/cmux";
+  if (existsSync(bundled)) return bundled;
+  return "cmux";
+}
+
 async function run(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
-  const proc = Bun.spawn(["cmux", ...args], { stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn([cmuxBin(), ...args], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
