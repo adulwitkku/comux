@@ -2,11 +2,22 @@
 
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
 import { acquireSurfaceLock, releaseSurfaceLock } from "./surface-lock.ts";
 import { dashboardPort, ensureDashboardToken } from "./dashboard-config.ts";
 import { ensureWorkspace } from "./workspace.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** Brew/dev installs ship dashboard/ without node_modules — install once on first launch. */
+async function ensureDashboardDeps(dashboardDir: string): Promise<void> {
+  const marker = join(dashboardDir, "node_modules", "@sinclair", "typebox");
+  if (existsSync(marker)) return;
+  console.log("  Installing dashboard dependencies (first run)…");
+  const proc = Bun.spawn(["bun", "install"], { cwd: dashboardDir, stdout: "inherit", stderr: "inherit" });
+  const code = await proc.exited;
+  if (code !== 0) throw new Error("dashboard: bun install failed — run: bun install --cwd dashboard");
+}
 
 export interface DashboardCliArgs {
   gateway: boolean;
@@ -30,6 +41,7 @@ export async function runDashboard(args: DashboardCliArgs): Promise<number> {
   process.env.COMUX_DASHBOARD_PORT = String(port);
 
   const dashboardDir = join(REPO_ROOT, "dashboard");
+  await ensureDashboardDeps(dashboardDir);
   const proc = Bun.spawn(["bun", "run", "dev"], {
     cwd: dashboardDir,
     env: { ...process.env, PORT: String(port) },
