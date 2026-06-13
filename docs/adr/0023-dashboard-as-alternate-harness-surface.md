@@ -18,6 +18,11 @@ The comux **core** stays runtime-dependency-free; `comux dashboard` shells into 
 v1 distribution is **dev-repo only** — the compiled `dist/comux` binary does not bundle the
 Dashboard; a later release may pre-build a Next standalone artifact.
 
+The dashboard workspace lists `@sinclair/typebox` as a **direct** dependency. Elysia declares
+it as a required (non-optional) peer; Bun's hardlink cache layout resolves the import from the
+cache realpath, where an auto-installed peer is not visible — providing it from the workspace
+manifest is the only reliable fix.
+
 This supersedes the original PRD's "Vanilla CSS + Bun.serve on 62120" and the roadmap's "Bun web
 app" sketch for M6. Next.js was chosen for component velocity (shadcn) and a well-trodden
 full-stack layout; Elysia keeps the API in TypeScript beside the app without adding a second
