@@ -1,8 +1,9 @@
 // Headless, cache-only quota probes for Dashboard agent roster (ADR-0024).
 // Probes read on-disk snapshots only — they never send prompts to wake usage counters.
 
-import { readFile } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { configDir } from "./config.ts";
 
@@ -95,9 +96,8 @@ function parseCursorPayload(raw: string): QuotaSnapshot {
   };
 }
 
-/** Read Cursor statusline cache written by ~/.cursor/statusline.sh (or comux docs). */
-async function probeCursor(): Promise<ProbeResult> {
-  const path = quotaCachePath("cursor");
+async function readQuotaCache(agent: string): Promise<ProbeResult> {
+  const path = quotaCachePath(agent);
   if (!existsSync(path)) {
     return {
       ok: true,
@@ -118,9 +118,133 @@ async function probeCursor(): Promise<ProbeResult> {
   }
 }
 
+/** Read Cursor statusline cache written by ~/.cursor/statusline.sh (or comux docs). */
+const probeCursor = () => readQuotaCache("cursor");
+
+/** Read Claude statusline cache written by ~/.claude/statusline-command.sh. */
+const probeClaude = () => readQuotaCache("claude");
+
+// --- Codex probe: parse the session log Codex already writes (ADR-0024) ---------------------
+// Unlike cursor/claude, Codex has no statusline-tee hook. It writes a `token_count` event with
+// `rate_limits` to its rollout session JSONL every turn, so we read the most-recent session and
+// take the last such entry. This works on an unmodified Codex install (no config tee needed).
+
+/** A Codex rate-limit window: `primary` = 5h, `secondary` = 7d. */
+interface CodexRateWindow {
+  used_percent?: number | null;
+  window_minutes?: number | null;
+  resets_at?: number | string | null;
+}
+
+interface CodexTokenCountPayload {
+  type?: string;
+  rate_limits?: {
+    primary?: CodexRateWindow | null;
+    secondary?: CodexRateWindow | null;
+  } | null;
+}
+
+const codexSessionsDir = () => join(homedir(), ".codex", "sessions");
+
+/** Recursively collect `*.jsonl` session files under Codex's sessions dir. */
+async function listCodexSessions(dir: string): Promise<string[]> {
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const e of entries) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) out.push(...(await listCodexSessions(full)));
+    else if (e.isFile() && e.name.endsWith(".jsonl")) out.push(full);
+  }
+  return out;
+}
+
+/** Find the most-recently-modified Codex session file, or null if none. */
+async function latestCodexSession(): Promise<string | null> {
+  const files = await listCodexSessions(codexSessionsDir());
+  let newest: { path: string; mtimeMs: number } | null = null;
+  for (const path of files) {
+    try {
+      const s = await stat(path);
+      if (!newest || s.mtimeMs > newest.mtimeMs) newest = { path, mtimeMs: s.mtimeMs };
+    } catch {
+      // file vanished between listing and stat — skip it.
+    }
+  }
+  return newest?.path ?? null;
+}
+
+/**
+ * A window reported in a past turn goes stale once its reset passes: Codex resets on that
+ * schedule, so a lapsed window is empty (0%), not still-full at the old percentage.
+ */
+function codexWindow(raw: CodexRateWindow | null | undefined): QuotaWindowSnapshot | null {
+  if (!raw) return null;
+  const resetIn = formatResetIn(raw.resets_at ?? null);
+  const lapsed = resetIn === "now";
+  const usedPct = lapsed ? 0 : roundPct(raw.used_percent ?? null);
+  if (usedPct == null && resetIn == null) return null;
+  return { usedPct, resetIn: lapsed ? null : resetIn };
+}
+
+/** Extract the last `token_count.rate_limits` entry from a session's JSONL lines. */
+function parseCodexSession(raw: string): QuotaSnapshot {
+  let latest: CodexTokenCountPayload["rate_limits"] | null = null;
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.includes("token_count")) continue;
+    try {
+      const evt = JSON.parse(trimmed) as { payload?: CodexTokenCountPayload };
+      const p = evt.payload;
+      if (p?.type === "token_count" && p.rate_limits) latest = p.rate_limits;
+    } catch {
+      // tolerate a truncated/partial final line.
+    }
+  }
+
+  const fiveHour = codexWindow(latest?.primary);
+  const sevenDay = codexWindow(latest?.secondary);
+  // Codex exposes no context-window total, so contextPct stays null (Context column shows —).
+  const hasAny = fiveHour != null || sevenDay != null;
+  return {
+    contextPct: null,
+    fiveHour,
+    sevenDay,
+    ...(hasAny ? {} : { noData: true }),
+  };
+}
+
+async function probeCodex(): Promise<ProbeResult> {
+  try {
+    const path = await latestCodexSession();
+    if (!path) {
+      return {
+        ok: true,
+        snapshot: { contextPct: null, fiveHour: null, sevenDay: null, noData: true },
+      };
+    }
+    const raw = (await readFile(path, "utf8")).trim();
+    if (!raw) {
+      return {
+        ok: true,
+        snapshot: { contextPct: null, fiveHour: null, sevenDay: null, noData: true },
+      };
+    }
+    return { ok: true, snapshot: parseCodexSession(raw) };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 type ProbeFn = () => Promise<ProbeResult>;
 
 const PROBES: Partial<Record<string, ProbeFn>> = {
+  claude: probeClaude,
+  codex: probeCodex,
   cursor: probeCursor,
 };
 
