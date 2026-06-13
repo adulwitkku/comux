@@ -163,20 +163,27 @@ async function listCodexSessions(dir: string): Promise<string[]> {
   return out;
 }
 
-/** Find the most-recently-modified Codex session file, or null if none. */
-async function latestCodexSession(): Promise<string | null> {
+/** Codex session files newest-first by mtime. */
+async function codexSessionsByMtime(): Promise<string[]> {
   const files = await listCodexSessions(codexSessionsDir());
-  let newest: { path: string; mtimeMs: number } | null = null;
+  const stamped: { path: string; mtimeMs: number }[] = [];
   for (const path of files) {
     try {
-      const s = await stat(path);
-      if (!newest || s.mtimeMs > newest.mtimeMs) newest = { path, mtimeMs: s.mtimeMs };
+      stamped.push({ path, mtimeMs: (await stat(path)).mtimeMs });
     } catch {
       // file vanished between listing and stat — skip it.
     }
   }
-  return newest?.path ?? null;
+  stamped.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return stamped.map((s) => s.path);
 }
+
+/**
+ * How many recent sessions to scan back for a rate-limit entry. The newest session by mtime is
+ * often one comux just opened for lifecycle (no turn yet, so no `token_count`); we walk back to
+ * the most recent session that actually carries usage. Capped so a long history stays cheap.
+ */
+const CODEX_SESSION_SCAN_LIMIT = 20;
 
 /**
  * A window reported in a past turn goes stale once its reset passes: Codex resets on that
@@ -218,23 +225,19 @@ function parseCodexSession(raw: string): QuotaSnapshot {
   };
 }
 
+const NO_DATA: QuotaSnapshot = { contextPct: null, fiveHour: null, sevenDay: null, noData: true };
+
 async function probeCodex(): Promise<ProbeResult> {
   try {
-    const path = await latestCodexSession();
-    if (!path) {
-      return {
-        ok: true,
-        snapshot: { contextPct: null, fiveHour: null, sevenDay: null, noData: true },
-      };
+    const sessions = await codexSessionsByMtime();
+    for (const path of sessions.slice(0, CODEX_SESSION_SCAN_LIMIT)) {
+      const raw = (await readFile(path, "utf8")).trim();
+      if (!raw) continue;
+      const snapshot = parseCodexSession(raw);
+      // Walk back past freshly-opened sessions that have no rate-limit entry yet.
+      if (!snapshot.noData) return { ok: true, snapshot };
     }
-    const raw = (await readFile(path, "utf8")).trim();
-    if (!raw) {
-      return {
-        ok: true,
-        snapshot: { contextPct: null, fiveHour: null, sevenDay: null, noData: true },
-      };
-    }
-    return { ok: true, snapshot: parseCodexSession(raw) };
+    return { ok: true, snapshot: NO_DATA };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }

@@ -49,10 +49,12 @@ rate limits — it writes a `token_count` event to its rollout session JSONL eve
   "secondary":{"used_percent":49.0,"window_minutes":10080, "resets_at":1781147783}}}
 ```
 
-The probe reads the **most-recently-modified** session under `~/.codex/sessions/**/*.jsonl`,
-takes the **last** `token_count.rate_limits` entry, and maps `primary` → 5h, `secondary` → 7d
-(`used_percent` → `usedPct`, `resets_at` → `resetIn`). No config tee is required — this works on
-an unmodified Codex install.
+The probe walks sessions under `~/.codex/sessions/**/*.jsonl` newest-first by mtime and uses the
+first that carries a `token_count.rate_limits` entry — the newest session is often one comux just
+opened for lifecycle (no turn yet, no usage), so stopping at it would wrongly report "no data".
+It takes that session's **last** entry and maps `primary` → 5h, `secondary` → 7d (`used_percent`
+→ `usedPct`, `resets_at` → `resetIn`); the scan is capped at the 20 most recent sessions. No
+config tee is required — this works on an unmodified Codex install.
 
 Because this is a **snapshot from the last turn** (not live like the tee probes), a window's
 `used_percent` goes stale once its `resets_at` passes. The probe therefore reports **0%** for any
