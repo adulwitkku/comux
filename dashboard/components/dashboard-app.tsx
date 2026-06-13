@@ -393,8 +393,9 @@ export function DashboardApp() {
               <p className="text-sm text-zinc-500">Waiting for agent_status events…</p>
             )}
             <p className="mt-4 text-xs text-zinc-600">
-              Lifecycle และ PATH อัปเดตอัตโนมัติทุก ~5s. Quota/context อัปเดตเมื่อกด Refresh — v1 มี probe
-              สำหรับ cursor เท่านั้น (อ่าน cache จาก statusline; ไม่ยิง prompt)
+              Lifecycle และ PATH อัปเดตอัตโนมัติทุก ~5s. Quota/context อัปเดตเมื่อกด Refresh — มี probe
+              สำหรับ cursor, claude (cache จาก statusline) และ codex (อ่าน session log); pi/agy/opencode
+              เป็น local model จึงไม่มี quota. ทั้งหมดอ่าน cache เท่านั้น ไม่ยิง prompt
             </p>
           </div>
         )}
