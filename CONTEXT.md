@@ -206,7 +206,9 @@ mark Cooldown or change the Scheduler).
 A headless, read-only check registered per Agent that snapshots context-window usage and
 rate-limit windows (5h / 7d when exposed) without opening a visible interactive TUI. Agents
 without a registered probe show **—**; probe failure surfaces an error on that row. Probes read
-cached data only — they do not send prompts to wake usage counters.
+cached data only — they do not send prompts to wake usage counters. For `agy`, the probe reads the active
+model from its CLI settings, extracts rate limits from the Antigravity IDE SQLite state database 
+(`state.vscdb`), and parses context usage from recent `transcript.jsonl` session logs.
 
 **Quota snapshot**:
 The Dashboard's point-in-time result for one Agent after a probe: context %, short-window usage

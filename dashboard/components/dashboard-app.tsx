@@ -207,18 +207,18 @@ export function DashboardApp() {
         <div className="mb-4 text-sm font-semibold tracking-wide text-zinc-100">comux</div>
         <nav className="flex flex-col gap-1">
           <Button
-            variant={tab === "chat" ? "default" : "ghost"}
-            className="justify-start"
-            onClick={() => setTab("chat")}
-          >
-            Chat
-          </Button>
-          <Button
             variant={tab === "agents" ? "default" : "ghost"}
             className="justify-start"
             onClick={() => setTab("agents")}
           >
             Agents
+          </Button>
+          <Button
+            variant={tab === "chat" ? "default" : "ghost"}
+            className="justify-start"
+            onClick={() => setTab("chat")}
+          >
+            Chat
           </Button>
         </nav>
       </aside>
@@ -394,8 +394,8 @@ export function DashboardApp() {
             )}
             <p className="mt-4 text-xs text-zinc-600">
               Lifecycle และ PATH อัปเดตอัตโนมัติทุก ~5s. Quota/context อัปเดตเมื่อกด Refresh — มี probe
-              สำหรับ cursor, claude (cache จาก statusline) และ codex (อ่าน session log); pi/agy/opencode
-              เป็น local model จึงไม่มี quota. ทั้งหมดอ่าน cache เท่านั้น ไม่ยิง prompt
+              สำหรับ cursor, claude (cache จาก statusline), codex (อ่าน session log) และ agy (อ่าน state.vscdb จาก Antigravity IDE);
+              pi/opencode เป็น local model จึงไม่มี quota. ทั้งหมดอ่าน cache เท่านั้น ไม่ยิง prompt
             </p>
           </div>
         )}

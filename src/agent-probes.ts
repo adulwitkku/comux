@@ -267,12 +267,98 @@ async function probeCodex(): Promise<ProbeResult> {
   }
 }
 
+// --- Agy (Antigravity) probe (ADR-002x) --------------------------------------------------------
+// agy CLI stores active model in its settings. The quota is tracked by Antigravity IDE
+// in its global storage SQLite DB (state.vscdb) as a base64 protobuf.
+
+async function probeAgy(): Promise<ProbeResult> {
+  try {
+    // 1. Read active model from agy settings
+    const settingsPath = join(homedir(), ".gemini", "antigravity-cli", "settings.json");
+    let activeModel = "Gemini 3.5 Flash (Medium)";
+    if (existsSync(settingsPath)) {
+      try {
+        const raw = await readFile(settingsPath, "utf8");
+        const settings = JSON.parse(raw);
+        if (settings.model) activeModel = settings.model;
+      } catch {
+        // ignore parse errors
+      }
+    }
+
+    // 2. Read state.vscdb from Antigravity IDE
+    const dbPath = join(
+      homedir(),
+      "Library",
+      "Application Support",
+      "Antigravity IDE",
+      "User",
+      "globalStorage",
+      "state.vscdb"
+    );
+    
+    if (!existsSync(dbPath)) {
+       return { ok: true, snapshot: NO_DATA };
+    }
+
+    // Lazy load bun:sqlite
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(dbPath, { readonly: true });
+    let b64Val = "";
+    try {
+      const row = db.query("SELECT value FROM ItemTable WHERE key = 'antigravityUnifiedStateSync.userStatus'").get() as { value: string } | null;
+      if (row) b64Val = row.value;
+    } finally {
+      db.close();
+    }
+
+    if (!b64Val) return { ok: true, snapshot: NO_DATA };
+
+    const buf = Buffer.from(b64Val, "base64");
+    const modelIdx = buf.indexOf(activeModel);
+
+    let fiveHour: QuotaWindowSnapshot | null = null;
+    
+    if (modelIdx !== -1) {
+      // Very basic heuristic: scan the bytes immediately following the model name
+      // looking for a double float timestamp representing "Refreshes in" (Unix seconds/ms)
+      // Since it's protobuf, there might be field tags. We just scan a small window for a valid date.
+      const searchEnd = Math.min(buf.length, modelIdx + activeModel.length + 50);
+      let foundResetMs: number | null = null;
+      
+      for (let i = modelIdx + activeModel.length; i <= searchEnd - 8; i++) {
+        const val = buf.readDoubleLE(i);
+        // Look for timestamp between 2024 and 2030 in seconds or ms
+        if (val > 1.7e9 && val < 2.0e9) {
+           foundResetMs = val * 1000;
+           break;
+        } else if (val > 1.7e12 && val < 2.0e12) {
+           foundResetMs = val;
+           break;
+        }
+      }
+      
+      if (foundResetMs) {
+         fiveHour = { usedPct: null, resetIn: formatResetIn(foundResetMs) };
+      }
+    }
+
+    // Context usage from transcript.jsonl could go here, but omitted for now as it lacks
+    // a straightforward token count field in the logs.
+    
+    return { ok: true, snapshot: { contextPct: null, fiveHour, sevenDay: null } };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 type ProbeFn = () => Promise<ProbeResult>;
 
 const PROBES: Partial<Record<string, ProbeFn>> = {
   claude: probeClaude,
   codex: probeCodex,
   cursor: probeCursor,
+  agy: probeAgy,
 };
 
 export function hasQuotaProbe(agentName: string): boolean {
