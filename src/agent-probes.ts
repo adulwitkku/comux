@@ -343,10 +343,31 @@ async function probeAgy(): Promise<ProbeResult> {
       }
     }
 
-    // Context usage from transcript.jsonl could go here, but omitted for now as it lacks
-    // a straightforward token count field in the logs.
+    let contextPct: number | null = null;
+    try {
+      const historyPath = join(homedir(), ".gemini", "antigravity-cli", "history.jsonl");
+      if (existsSync(historyPath)) {
+        const historyData = await readFile(historyPath, "utf8");
+        const lines = historyData.trim().split("\n");
+        let activeConvId = null;
+        for (let i = lines.length - 1; i >= 0; i--) {
+           try {
+             const parsed = JSON.parse(lines[i]);
+             if (parsed.conversationId) { activeConvId = parsed.conversationId; break; }
+           } catch {}
+        }
+        if (activeConvId) {
+           const tPath = join(homedir(), ".gemini", "antigravity-cli", "brain", activeConvId, ".system_generated", "logs", "transcript.jsonl");
+           if (existsSync(tPath)) {
+              const stats = await stat(tPath);
+              // Rough heuristic: 1 token = 4 bytes. 2M context max = 8,000,000 bytes.
+              contextPct = Math.min(100, Math.max(0, Math.round((stats.size / 8000000) * 100)));
+           }
+        }
+      }
+    } catch {}
     
-    return { ok: true, snapshot: { contextPct: null, fiveHour, sevenDay: null } };
+    return { ok: true, snapshot: { contextPct, fiveHour, sevenDay: null } };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }

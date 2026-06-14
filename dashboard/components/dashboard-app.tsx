@@ -61,7 +61,7 @@ function stripAnsi(s: string): string {
 }
 
 export function DashboardApp() {
-  const [tab, setTab] = useState<Tab>("chat");
+  const [tab, setTab] = useState<Tab>("agents");
   const [logs, setLogs] = useState<string[]>([]);
   const [input, setInput] = useState("");
   const [phase, setPhase] = useState("idle");
