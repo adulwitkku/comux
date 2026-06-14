@@ -338,16 +338,47 @@ export function DashboardApp() {
                 </Button>
               </div>
             </div>
+            <div className="mb-4 space-y-1.5 rounded-md border border-zinc-800 bg-zinc-900/50 p-3 text-xs text-zinc-400">
+              <div>
+                <span className="font-medium text-zinc-300">Context</span> — context window ของ session
+                ปัจจุบันถูกใช้ไปกี่ % (ยิ่งเต็ม ยิ่งใกล้ต้อง /compact)
+              </div>
+              <div>
+                <span className="font-medium text-zinc-300">5h / 7d limit</span> — โควต้า rate-limit
+                แบบ rolling: แท่ง = ใช้โควต้าไปแล้วกี่ %, “resets in …” = อีกนานเท่าไรโควต้าถึงจะคืน
+              </div>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-2 w-3 rounded bg-emerald-500" />ยังเหลือเยอะ &lt;70%
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-2 w-3 rounded bg-amber-500" />ใกล้เต็ม 70–90%
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-2 w-3 rounded bg-red-500" />เกือบชน limit ≥90%
+                </span>
+              </div>
+            </div>
             <table className="w-full text-left text-sm">
               <thead className="text-zinc-500">
                 <tr className="border-b border-zinc-800">
                   <th className="py-2 pr-4">Agent</th>
                   <th className="py-2 pr-4">CLI</th>
-                  <th className="py-2 pr-4">PATH</th>
-                  <th className="py-2 pr-4">Lifecycle</th>
-                  <th className="py-2 pr-4">Context</th>
-                  <th className="py-2 pr-4">5h</th>
-                  <th className="py-2 pr-4">7d</th>
+                  <th className="py-2 pr-4" title="พบ CLI บน PATH หรือไม่">
+                    On PATH
+                  </th>
+                  <th className="py-2 pr-4" title="สถานะ agent สดจาก cmux (idle / running / needsInput)">
+                    Status
+                  </th>
+                  <th className="py-2 pr-4" title="context window ของ session ปัจจุบันใช้ไปกี่ %">
+                    Context used
+                  </th>
+                  <th className="py-2 pr-4" title="โควต้า rate-limit รอบ 5 ชั่วโมง (rolling)">
+                    5-hour limit
+                  </th>
+                  <th className="py-2 pr-4" title="โควต้า rate-limit รอบ 7 วัน (rolling)">
+                    7-day limit
+                  </th>
                 </tr>
               </thead>
               <tbody>

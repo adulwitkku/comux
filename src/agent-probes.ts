@@ -317,7 +317,7 @@ async function probeAgy(): Promise<ProbeResult> {
     const buf1 = Buffer.from(b64Val, "base64");
     const str1 = buf1.toString("utf8");
     const match = str1.match(/(EAEa[A-Za-z0-9+/]+={0,2})/);
-    const buf = match ? Buffer.from(match[1], "base64") : buf1;
+    const buf = match?.[1] ? Buffer.from(match[1], "base64") : buf1;
     
     const modelIdx = buf.indexOf(activeModel);
 
@@ -333,6 +333,7 @@ async function probeAgy(): Promise<ProbeResult> {
         let j = i;
         while (j < searchEnd) {
           const b = buf[j];
+          if (b === undefined) break;
           num += (b & 0x7f) * Math.pow(2, shift);
           shift += 7;
           if (!(b & 0x80)) break;
@@ -358,7 +359,7 @@ async function probeAgy(): Promise<ProbeResult> {
         let activeConvId = null;
         for (let i = lines.length - 1; i >= 0; i--) {
            try {
-             const parsed = JSON.parse(lines[i]);
+             const parsed = JSON.parse(lines[i] ?? "");
              if (parsed.conversationId) { activeConvId = parsed.conversationId; break; }
            } catch {}
         }
