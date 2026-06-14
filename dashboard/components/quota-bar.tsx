@@ -17,6 +17,9 @@ export function QuotaBar({ usedPct, resetIn, noData, emptyLabel = "—" }: Quota
     return <span className="text-xs text-zinc-500">(no data yet)</span>;
   }
   if (usedPct == null) {
+    if (resetIn) {
+      return <span className="text-xs text-zinc-600">reset {resetIn}</span>;
+    }
     return <span className="text-zinc-600">{emptyLabel}</span>;
   }
 

@@ -314,26 +314,32 @@ async function probeAgy(): Promise<ProbeResult> {
 
     if (!b64Val) return { ok: true, snapshot: NO_DATA };
 
-    const buf = Buffer.from(b64Val, "base64");
+    const buf1 = Buffer.from(b64Val, "base64");
+    const str1 = buf1.toString("utf8");
+    const match = str1.match(/(EAEa[A-Za-z0-9+/]+={0,2})/);
+    const buf = match ? Buffer.from(match[1], "base64") : buf1;
+    
     const modelIdx = buf.indexOf(activeModel);
 
     let fiveHour: QuotaWindowSnapshot | null = null;
     
     if (modelIdx !== -1) {
-      // Very basic heuristic: scan the bytes immediately following the model name
-      // looking for a double float timestamp representing "Refreshes in" (Unix seconds/ms)
-      // Since it's protobuf, there might be field tags. We just scan a small window for a valid date.
       const searchEnd = Math.min(buf.length, modelIdx + activeModel.length + 50);
       let foundResetMs: number | null = null;
       
-      for (let i = modelIdx + activeModel.length; i <= searchEnd - 8; i++) {
-        const val = buf.readDoubleLE(i);
-        // Look for timestamp between 2024 and 2030 in seconds or ms
-        if (val > 1.7e9 && val < 2.0e9) {
-           foundResetMs = val * 1000;
-           break;
-        } else if (val > 1.7e12 && val < 2.0e12) {
-           foundResetMs = val;
+      for (let i = modelIdx + activeModel.length; i < searchEnd; i++) {
+        let num = 0;
+        let shift = 0;
+        let j = i;
+        while (j < searchEnd) {
+          const b = buf[j];
+          num += (b & 0x7f) * Math.pow(2, shift);
+          shift += 7;
+          if (!(b & 0x80)) break;
+          j++;
+        }
+        if (num > 1.7e9 && num < 2.0e9) {
+           foundResetMs = num * 1000;
            break;
         }
       }
