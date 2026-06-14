@@ -380,6 +380,84 @@ async function probeAgy(): Promise<ProbeResult> {
   }
 }
 
+// --- opencode / z.ai (GLM Coding Plan) probe ---------------------------------------------------
+// Unlike the other probes this one is NOT cache-only: z.ai exposes quota solely via its monitor
+// API, so we make one short read-only GET. It reports usage; it does not send a prompt or wake any
+// usage counter (ADR-0024's "never wake usage" intent is preserved). The key is read from the
+// opencode auth store written by `opencode auth login` — we use the `zai-coding-plan` credential
+// (the pay-as-you-go `zai` key has no coding-plan quota and 401s on this endpoint).
+
+const ZAI_QUOTA_URL = "https://api.z.ai/api/monitor/usage/quota/limit";
+
+/** z.ai limit window units we map. `3` = rolling 5-hour, `6` = weekly (≈ our 7-day slot). */
+const ZAI_UNIT_FIVE_HOUR = 3;
+const ZAI_UNIT_WEEKLY = 6;
+
+interface ZaiLimit {
+  type?: string;
+  unit?: number;
+  percentage?: number | null;
+  nextResetTime?: number | null;
+}
+
+interface ZaiQuotaResponse {
+  success?: boolean;
+  data?: { limits?: ZaiLimit[] | null } | null;
+}
+
+/** Read the `zai-coding-plan` API key from opencode's auth store, if present. */
+async function readZaiCodingPlanKey(): Promise<string | null> {
+  const authPath = join(homedir(), ".local", "share", "opencode", "auth.json");
+  if (!existsSync(authPath)) return null;
+  try {
+    const raw = await readFile(authPath, "utf8");
+    const auth = JSON.parse(raw) as Record<string, { key?: string } | undefined>;
+    const key = auth["zai-coding-plan"]?.key;
+    return typeof key === "string" && key.length > 0 ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+function zaiWindow(limit: ZaiLimit | undefined): QuotaWindowSnapshot | null {
+  if (!limit) return null;
+  const usedPct = roundPct(limit.percentage ?? null);
+  const resetIn = formatResetIn(limit.nextResetTime ?? null);
+  if (usedPct == null && resetIn == null) return null;
+  return { usedPct, resetIn };
+}
+
+async function probeOpencode(): Promise<ProbeResult> {
+  try {
+    const key = await readZaiCodingPlanKey();
+    if (!key) return { ok: true, snapshot: NO_DATA };
+
+    const res = await fetch(ZAI_QUOTA_URL, {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    if (!res.ok) return { ok: false, error: `z.ai quota HTTP ${res.status}` };
+
+    const body = (await res.json()) as ZaiQuotaResponse;
+    if (!body.success || !body.data?.limits) return { ok: true, snapshot: NO_DATA };
+
+    const byUnit = new Map<number, ZaiLimit>();
+    for (const limit of body.data.limits) {
+      if (typeof limit.unit === "number") byUnit.set(limit.unit, limit);
+    }
+
+    const fiveHour = zaiWindow(byUnit.get(ZAI_UNIT_FIVE_HOUR));
+    const sevenDay = zaiWindow(byUnit.get(ZAI_UNIT_WEEKLY));
+    const hasAny = fiveHour != null || sevenDay != null;
+    return {
+      ok: true,
+      // z.ai reports no per-conversation context window for opencode runs.
+      snapshot: { contextPct: null, fiveHour, sevenDay, ...(hasAny ? {} : { noData: true }) },
+    };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 type ProbeFn = () => Promise<ProbeResult>;
 
 const PROBES: Partial<Record<string, ProbeFn>> = {
@@ -387,6 +465,7 @@ const PROBES: Partial<Record<string, ProbeFn>> = {
   codex: probeCodex,
   cursor: probeCursor,
   agy: probeAgy,
+  opencode: probeOpencode,
 };
 
 export function hasQuotaProbe(agentName: string): boolean {
