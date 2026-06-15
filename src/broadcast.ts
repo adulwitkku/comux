@@ -446,15 +446,21 @@ export function uniqueEnabledBinaries(roster: BroadcastSlot[]): string[] {
 // Broadcast update — external package-manager refresh per roster binary         //
 // --------------------------------------------------------------------------- //
 
-/** Ordered update attempts per binary (brew-first, npm fallback where common). */
+/**
+ * Ordered update attempts per binary. Each Agent CLI ships its own self-update subcommand — that is
+ * the canonical updater regardless of how the binary reached PATH (native installer under
+ * ~/.local/bin / ~/.bun/bin / ~/.opencode/bin, or a brew cask). brew/npm stay as fallbacks for users
+ * who installed via those package managers. Note `npm update -g X` exits 0 even when X isn't
+ * installed (a false-positive "ok"), so the fallback uses `npm install -g` to be meaningful.
+ */
 export const BROADCAST_UPDATE_COMMANDS: Record<string, string[][]> = {
-  pi: [["brew", "upgrade", "pi"]],
-  claude: [["brew", "upgrade", "claude"], ["npm", "update", "-g", "@anthropic-ai/claude-code"]],
-  codex: [["brew", "upgrade", "codex"], ["npm", "update", "-g", "@openai/codex"]],
-  "cursor-agent": [["brew", "upgrade", "cursor-agent"]],
-  agent: [["brew", "upgrade", "cursor-agent"]],
-  agy: [["brew", "upgrade", "antigravity"], ["brew", "upgrade", "agy"]],
-  opencode: [["brew", "upgrade", "opencode"], ["npm", "update", "-g", "opencode-ai"]],
+  pi: [["pi", "update"]],
+  claude: [["claude", "update"], ["npm", "install", "-g", "@anthropic-ai/claude-code"]],
+  codex: [["codex", "update"], ["brew", "upgrade", "codex"]],
+  "cursor-agent": [["cursor-agent", "update"]],
+  agent: [["agent", "update"]],
+  agy: [["agy", "update"]],
+  opencode: [["opencode", "upgrade"], ["npm", "install", "-g", "opencode-ai"]],
 };
 
 export type UpdateRun = (cmd: string[]) => Promise<number>;
