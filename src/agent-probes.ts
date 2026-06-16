@@ -286,17 +286,12 @@ async function probeAgy(): Promise<ProbeResult> {
       }
     }
 
-    // 2. Read state.vscdb from Antigravity IDE
-    const dbPath = join(
-      homedir(),
-      "Library",
-      "Application Support",
-      "Antigravity IDE",
-      "User",
-      "globalStorage",
-      "state.vscdb"
-    );
-    
+    // 2. Read state.vscdb from Antigravity IDE (macOS or Linux XDG)
+    const macDbPath = join(homedir(), "Library", "Application Support", "Antigravity IDE", "User", "globalStorage", "state.vscdb");
+    const xdgConfig = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+    const linuxDbPath = join(xdgConfig, "Antigravity IDE", "User", "globalStorage", "state.vscdb");
+    const dbPath = existsSync(macDbPath) ? macDbPath : linuxDbPath;
+
     if (!existsSync(dbPath)) {
        return { ok: true, snapshot: NO_DATA };
     }
