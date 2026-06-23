@@ -38,6 +38,7 @@ import {
   type Capability,
 } from "../src/config.ts";
 import { runSetup, detectAgents, type SetupResult } from "../src/setup.ts";
+import { applySecretsToEnv, setSecret } from "../src/secrets.ts";
 import { acquireSurfaceLock, releaseSurfaceLock } from "../src/surface-lock.ts";
 import { createSay } from "../src/harness-say.ts";
 import { parseDashboardArgs, runDashboard } from "../src/dashboard-cli.ts";
@@ -189,6 +190,9 @@ const autoYes = !!process.env.COMUX_YES;
 const firstRun = !configExists();
 const firstSetup: SetupResult | null = firstRun ? await runSetup() : null;
 let config: Config = firstSetup?.config ?? (await loadConfig());
+// ADR-0025: load saved Provider API keys into the env (a real `export` still wins) before
+// resolving the active Provider, so a key set once via /key works on the next launch.
+await applySecretsToEnv();
 // ADR-0025: pick the active Orchestrator Provider (null => native Ollama) and resolve the model.
 // COMUX_MODEL env wins, then the saved model, then the active Provider's default, then gemma.
 const envProvider = process.env.COMUX_PROVIDER;
@@ -250,6 +254,12 @@ const registry: Command[] = [
     },
   },
   { name: "/model", desc: "pick the Orchestrator model (ollama / cloud)", run: runModelPicker },
+  {
+    name: "/key",
+    desc: "save a cloud provider API key (e.g. /key groq gsk_…)",
+    complete: (q) => config.providers.map((p) => ({ name: p.name, desc: p.apiKeyEnv })).filter((i) => i.name.includes(q)),
+    run: runSetKey,
+  },
   { name: "/setup", desc: "detect agents & write default chains", run: runSetupCmd },
   { name: "/settings", desc: "edit agent chains per capability", run: runSettingsPicker },
   { name: "/broadcast", desc: "edit broadcast roster (comux all send)", run: runBroadcastPicker },
@@ -421,6 +431,35 @@ async function runBroadcastPicker(): Promise<void> {
   };
   await saveConfig(config);
   say(c.green("  ✓ saved broadcast roster"));
+}
+
+/** /key [provider] <api-key> — save a cloud Provider's API key locally (ADR-0025), no `export`. */
+async function runSetKey(arg: string): Promise<void> {
+  const parts = arg.trim().split(/\s+/).filter(Boolean);
+  const names = config.providers.map((p) => p.name);
+  if (!parts.length) {
+    say(ui.warn(`usage: /key [provider] <api-key>   เช่น  /key groq gsk_xxx   (providers: ${names.join(", ") || "none"})`));
+    return;
+  }
+  // If the first token names a configured Provider, the rest is the key; otherwise target the
+  // active Provider (or the only configured one) and treat the whole arg as the key.
+  let prov: Provider | undefined = config.providers.find((p) => p.name === parts[0]);
+  let key: string;
+  if (prov) {
+    key = parts.slice(1).join(" ");
+  } else {
+    prov = provider ?? (config.providers.length === 1 ? config.providers[0] : undefined);
+    key = parts.join(" ");
+  }
+  if (!prov) {
+    say(ui.warn(`ระบุ provider ด้วย: /key <provider> <key>   (providers: ${names.join(", ")})`));
+    return;
+  }
+  if (!key) { say(ui.warn("ใส่ key ต่อท้ายด้วย")); return; }
+  const path = await setSecret(prov.apiKeyEnv, key);
+  process.env[prov.apiKeyEnv] = key; // live this session too
+  const masked = key.length > 8 ? `${key.slice(0, 4)}…${key.slice(-4)}` : "set";
+  say(ui.ok(`${prov.apiKeyEnv} → ${masked}  (saved 0600: ${path})`));
 }
 
 /** /model — pick the Orchestrator backend: an Ollama model or a cloud Provider model (ADR-0025). */

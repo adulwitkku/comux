@@ -400,7 +400,8 @@ export class Tui {
         for (const l of logical.slice(1)) out += "  " + l + "\n";
         process.stdout.write(out);
         teardown();
-        if (val && val.trim()) this.appendHistory(val);
+        // Never persist secret-bearing commands (e.g. `/key <api-key>`) to the on-disk history.
+        if (val && val.trim() && !/^\/key(\s|$)/i.test(val.trim())) this.appendHistory(val);
         resolve(val);
       };
 

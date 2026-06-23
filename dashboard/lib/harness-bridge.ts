@@ -9,6 +9,7 @@ import { createSay } from "@comux/harness-say.ts";
 import { collectAgentStatus, refreshAgentQuotas, type AgentQuotaView, type AgentStatusRow } from "@comux/agent-roster.ts";
 import { loadConfig, configExists, activeProvider, type Config, type Capability } from "@comux/config.ts";
 import { runSetup, detectAgents } from "@comux/setup.ts";
+import { applySecretsToEnv } from "@comux/secrets.ts";
 import { startFeedWatcher } from "@comux/feed.ts";
 import { ensureWorkspace, readPlan, currentBranch, clearChatFiles } from "@comux/workspace.ts";
 import { lastStats, setActiveProvider, setDefaultModel } from "@comux/llm.ts";
@@ -61,7 +62,9 @@ export class DashboardSession {
       const setup = await runSetup();
       config = setup.config;
     }
-    // ADR-0025: resolve the active Orchestrator Provider (null => native Ollama) and its model.
+    // ADR-0025: apply saved Provider keys to the env (a real export still wins) before resolving
+    // the active Provider, then pick it (null => native Ollama) and its model.
+    await applySecretsToEnv();
     const provider = activeProvider(config);
     const model = envModel ?? config.model ?? provider?.model ?? "gemma4:12b-mlx";
     setActiveProvider(provider);
