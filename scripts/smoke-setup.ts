@@ -9,7 +9,7 @@ import { join } from "node:path";
 const xdg = mkdtempSync(join(tmpdir(), "comux-cfg-"));
 process.env.XDG_CONFIG_HOME = xdg;
 
-const { DEFAULT_BROADCAST_ROSTER, DEFAULT_CHAINS, loadConfig, saveConfig, configExists, configPath } = await import("../src/config.ts");
+const { DEFAULT_BROADCAST_ROSTER, DEFAULT_CHAINS, DEFAULT_PROVIDERS, loadConfig, saveConfig, configExists, configPath } = await import("../src/config.ts");
 const { REGISTRY, agentByName, AGENT_BINARIES, pi } = await import("../src/agents.ts");
 const { detectAgents } = await import("../src/setup.ts");
 const { slugTopic, artifactFilename, topicFromTask, inferTopicFromInput, resolveTopic } = await import("../src/orchestrator.ts");
@@ -44,6 +44,7 @@ try {
     chains: { ...DEFAULT_CHAINS, coding: ["pi", "claude"] },
     bypass: true,
     broadcast: { roster: structuredClone(DEFAULT_BROADCAST_ROSTER) },
+    providers: structuredClone(DEFAULT_PROVIDERS),
   };
   const path = await saveConfig(custom);
   ok("saveConfig writes under XDG_CONFIG_HOME", path.startsWith(xdg) && configExists(), path);

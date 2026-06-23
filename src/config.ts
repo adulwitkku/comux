@@ -34,6 +34,22 @@ export interface BroadcastConfig {
   roster: BroadcastSlot[];
 }
 
+/**
+ * An OpenAI-compatible cloud Provider for the Orchestrator (ADR-0025). A Provider serves the
+ * Orchestrator's chat completions only — it is NOT an Agent and never appears in a Capability
+ * chain. Ollama is the native default backend and is not represented here.
+ */
+export interface Provider {
+  /** Stable name, used as the active-provider selector (`config.provider`). */
+  name: string;
+  /** OpenAI-compatible base, e.g. https://api.groq.com/openai/v1 (no trailing /chat/completions). */
+  baseUrl: string;
+  /** Env var the API key is read from at call time. Missing key => hard error (ADR-0025). */
+  apiKeyEnv: string;
+  /** Default model served by this Provider (e.g. qwen/qwen3.6-27b). */
+  model: string;
+}
+
 export interface Config {
   /** Ordered Agent names (most-preferred first) per kind of work. */
   chains: Record<ChainKey, string[]>;
@@ -48,6 +64,16 @@ export interface Config {
   broadcast: BroadcastConfig;
   /** Orchestrator model, picked via /model. COMUX_MODEL env still overrides when set. */
   model?: string;
+  /**
+   * OpenAI-compatible cloud Providers for the Orchestrator (ADR-0025). Ollama is the native
+   * default backend and is not listed here; these are the extra, selectable backends.
+   */
+  providers: Provider[];
+  /**
+   * Active Orchestrator Provider name. Undefined or "ollama" => native Ollama. Otherwise must
+   * match a `providers[].name`. COMUX_PROVIDER env overrides when set (ADR-0025).
+   */
+  provider?: string;
 }
 
 /**
@@ -63,6 +89,20 @@ export const DEFAULT_CHAINS: Record<ChainKey, string[]> = {
   chat: [],
 };
 
+/**
+ * Cloud Providers shipped pre-seeded but inactive (ADR-0025): the active backend stays Ollama
+ * until the user runs `/model` and picks one. Groq is the requested default; export GROQ_API_KEY
+ * to use it.
+ */
+export const DEFAULT_PROVIDERS: Provider[] = [
+  {
+    name: "groq",
+    baseUrl: "https://api.groq.com/openai/v1",
+    apiKeyEnv: "GROQ_API_KEY",
+    model: "qwen/qwen3.6-27b",
+  },
+];
+
 /** Default Broadcast roster: nine slots with per-slot models — the cap for one Equal grid
  *  (`comux all`, ADR-0021). */
 export const DEFAULT_BROADCAST_ROSTER: BroadcastSlot[] = [
@@ -75,6 +115,9 @@ export const DEFAULT_BROADCAST_ROSTER: BroadcastSlot[] = [
   { id: "opencode-deepseek-v4", displayName: "OC DeepSeek", binary: "opencode", model: "opencode/deepseek-v4-flash-free", enabled: true },
   { id: "opencode-mimo-v2.5", displayName: "OC MiMo", binary: "opencode", model: "opencode/mimo-v2.5-free", enabled: true },
   { id: "opencode-nemotron-3", displayName: "OC Nemotron", binary: "opencode", model: "opencode/nemotron-3-ultra-free", enabled: true },
+  // Groq via opencode (ADR-0025): a cloud model used for coding indirectly, behind the opencode
+  // Agent (opencode needs its own Groq auth, separate from the Orchestrator's GROQ_API_KEY).
+  { id: "opencode-groq-qwen", displayName: "OC Groq Qwen", binary: "opencode", model: "groq/qwen/qwen3.6-27b", enabled: true },
 ];
 
 /** Fingerprint of the enabled roster — stored in broadcast state to detect config changes. */
@@ -106,15 +149,28 @@ export async function loadConfig(): Promise<Config> {
       chains: { ...DEFAULT_CHAINS, ...(raw.chains ?? {}) },
       bypass: raw.bypass ?? true, // ADR-0016: Bypass mode is default ON
       broadcast: { roster: raw.broadcast?.roster ?? structuredClone(DEFAULT_BROADCAST_ROSTER) },
+      providers: raw.providers ?? structuredClone(DEFAULT_PROVIDERS), // ADR-0025
       ...(raw.model ? { model: raw.model } : {}),
+      ...(raw.provider ? { provider: raw.provider } : {}),
     };
   } catch {
     return {
       chains: { ...DEFAULT_CHAINS },
       bypass: true,
       broadcast: { roster: structuredClone(DEFAULT_BROADCAST_ROSTER) },
+      providers: structuredClone(DEFAULT_PROVIDERS),
     };
   }
+}
+
+/**
+ * Resolve the active Orchestrator Provider (ADR-0025). COMUX_PROVIDER env overrides
+ * `config.provider`; "ollama" (or unset/unknown name) => null, meaning the native Ollama backend.
+ */
+export function activeProvider(config: Config): Provider | null {
+  const name = process.env.COMUX_PROVIDER ?? config.provider;
+  if (!name || name === "ollama") return null;
+  return config.providers.find((p) => p.name === name) ?? null;
 }
 
 /** Write `config` to disk (creating ~/.config/comux), returning the path written. */

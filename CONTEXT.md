@@ -11,14 +11,30 @@ The whole local-first system: the deterministic plumbing plus the local model pl
 the artifacts view. The thing the user runs.
 
 **Orchestrator**:
-The small local model (gemma4:12b-mlx via Ollama). Its sole job is to turn natural-language
-user input into a structured task spec. It does NOT make routing, fallback, or
-compaction decisions — those are deterministic code. It is an **optional front-door
+The small model that turns natural-language user input into a structured task spec (and writes
+the `chat` Capability reply itself). Its sole job is classification — it does NOT make routing,
+fallback, or compaction decisions, those are deterministic code. It is an **optional front-door
 classifier** (chat vs job), not the conductor: the autonomous run is driven by deterministic
-local code (the Harness), so the Orchestrator can be swapped for a heuristic and Ollama made
-an optional dependency.
+local code (the Harness), so the Orchestrator can be swapped for a heuristic and its Provider made
+an optional dependency. It runs on a **Provider** (Ollama by default, `gemma4:12b-mlx`); the
+Orchestrator is the *role*, the Provider is the *backend* serving it.
 _Avoid_: Brain (overstates its role — it does not plan autonomously); Conductor (the
 deterministic Harness loop is the conductor, not the model)
+
+**Provider**:
+The backend that serves the **Orchestrator**'s chat completions — distinct from an **Agent**
+(an Agent is a tool-using coding CLI that runs in a pane; a Provider only answers chat
+completions over HTTP and does the Orchestrator's classify/`chat` work, nothing else). There is
+exactly **one active Provider** at a time, chosen via `/model`. Two kinds exist: **Ollama** (the
+native, default backend, also the source of local model discovery) and **OpenAI-compatible cloud
+providers** (e.g. Groq, serving `qwen/qwen3.6-27b`), each named, with its own endpoint and an
+API-key env var. Selecting a cloud Provider whose key is unset is a hard error, not a silent
+fallback. A Provider can **never** be a coding Agent: it has no tools and cannot satisfy a
+`coding`/`web_search`/`image` Capability. (A cloud model can still be used for coding *indirectly*
+— as a model behind an Agent CLI like `opencode` — but that is the Agent's concern, not the
+Provider's.)
+_Avoid_: Agent (a Provider has no tools and never appears in a Capability chain); Model (a Model
+is the weight name a Provider serves, e.g. `qwen/qwen3.6-27b`; the Provider is the backend)
 
 **Agent**:
 An external, more-capable coding CLI that does the actual work. The "hands" of the system.

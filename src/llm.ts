@@ -7,6 +7,8 @@
 //    the JSON in a ```json fence. We send the schema as a best-effort hint but parse
 //    defensively (see extractJson).
 
+import type { Provider } from "./config.ts";
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
@@ -35,6 +37,89 @@ export function setDefaultModel(model: string): void {
   defaultModel = model;
 }
 
+// The active Orchestrator Provider (ADR-0025). null => the native Ollama backend below. When a
+// cloud Provider is active, `chat`/`listModels` speak the OpenAI-compatible shape instead.
+let activeCloud: Provider | null = null;
+
+export function setActiveProvider(provider: Provider | null): void {
+  activeCloud = provider;
+}
+
+/** Read a cloud Provider's API key or throw the hard error the user is told to fix (ADR-0025). */
+function requireKey(provider: Provider): string {
+  const key = process.env[provider.apiKeyEnv];
+  if (!key) {
+    throw new Error(`${provider.apiKeyEnv} unset — run /model to pick another provider or export the key`);
+  }
+  return key;
+}
+
+/**
+ * Strip a reasoning model's `<think>…</think>` block from chat content. Ollama gets `think:false`,
+ * but the OpenAI shape has no such switch, so a reasoning Provider (e.g. Groq's qwen3.6) leaks its
+ * chain-of-thought into `content` — which both breaks JSON extraction and would surface raw
+ * reasoning in a `chat` reply. Also handles models that emit only the closing `</think>` tag.
+ */
+function stripReasoning(s: string): string {
+  let out = s.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  const close = out.lastIndexOf("</think>");
+  if (close !== -1) out = out.slice(close + "</think>".length);
+  return out.trim();
+}
+
+/** One OpenAI-compatible chat completion against a cloud Provider. */
+async function chatOpenAI(messages: ChatMessage[], model: string, provider: Provider, opts: ChatOptions): Promise<string> {
+  const key = requireKey(provider);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), opts.timeoutMs ?? 120_000);
+  const started = performance.now();
+  try {
+    const res = await fetch(`${provider.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: opts.temperature ?? 0,
+        // OpenAI-shape JSON mode; best-effort, output is still defended by extractJson (ADR-0008).
+        ...(opts.format ? { response_format: { type: "json_object" } } : {}),
+      }),
+      signal: ac.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`${provider.name} ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    }
+    const data = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+      usage?: { completion_tokens?: number; prompt_tokens?: number };
+    };
+    const evalTokens = data.usage?.completion_tokens ?? null;
+    const elapsedSec = (performance.now() - started) / 1000;
+    lastStats = {
+      tokensPerSec: evalTokens && elapsedSec > 0 ? evalTokens / elapsedSec : null,
+      evalTokens,
+      promptTokens: data.usage?.prompt_tokens ?? null,
+    };
+    return stripReasoning(data.choices?.[0]?.message?.content ?? "");
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Models a cloud Provider serves (for the /model picker); its configured default on any error. */
+export async function listProviderModels(provider: Provider): Promise<string[]> {
+  try {
+    const key = requireKey(provider);
+    const res = await fetch(`${provider.baseUrl}/models`, { headers: { authorization: `Bearer ${key}` } });
+    if (!res.ok) return [provider.model];
+    const data = (await res.json()) as { data?: { id?: string }[] };
+    const ids = (data.data ?? []).map((m) => m.id ?? "").filter(Boolean);
+    return ids.length ? ids.sort() : [provider.model];
+  } catch {
+    return [provider.model];
+  }
+}
+
 /** Model names available on the Ollama server (for the /model picker). */
 export async function listModels(baseUrl = DEFAULTS.baseUrl): Promise<string[]> {
   const res = await fetch(`${baseUrl}/api/tags`);
@@ -45,8 +130,12 @@ export async function listModels(baseUrl = DEFAULTS.baseUrl): Promise<string[]> 
 
 /** One non-streaming chat completion; returns the assistant message content. */
 export async function chat(messages: ChatMessage[], opts: ChatOptions = {}): Promise<string> {
-  const baseUrl = opts.baseUrl ?? DEFAULTS.baseUrl;
   const model = opts.model ?? defaultModel;
+  // A cloud Provider (ADR-0025) handles the turn unless the caller pins an explicit Ollama baseUrl.
+  if (activeCloud && !opts.baseUrl) {
+    return chatOpenAI(messages, model, activeCloud, opts);
+  }
+  const baseUrl = opts.baseUrl ?? DEFAULTS.baseUrl;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), opts.timeoutMs ?? 120_000);
   try {

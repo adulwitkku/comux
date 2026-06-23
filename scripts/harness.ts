@@ -22,7 +22,7 @@ import { ensureWorkspace, readPlan, currentBranch, listFiles, clearChatFiles, li
 import { runTurn } from "../src/harness.ts";
 import { startFeedWatcher } from "../src/feed.ts";
 import { Tui, type Item } from "../src/tui.ts";
-import { lastStats, listModels, setDefaultModel } from "../src/llm.ts";
+import { lastStats, listModels, listProviderModels, setActiveProvider, setDefaultModel } from "../src/llm.ts";
 import { VERSION } from "../src/version.ts";
 import { c, ui } from "../src/ui.ts";
 import {
@@ -30,8 +30,10 @@ import {
   saveConfig,
   configExists,
   configPath,
+  activeProvider,
   DEFAULT_BROADCAST_ROSTER,
   type Config,
+  type Provider,
   type ChainKey,
   type Capability,
 } from "../src/config.ts";
@@ -187,7 +189,12 @@ const autoYes = !!process.env.COMUX_YES;
 const firstRun = !configExists();
 const firstSetup: SetupResult | null = firstRun ? await runSetup() : null;
 let config: Config = firstSetup?.config ?? (await loadConfig());
-if (!envModel && config.model) model = config.model;
+// ADR-0025: pick the active Orchestrator Provider (null => native Ollama) and resolve the model.
+// COMUX_MODEL env wins, then the saved model, then the active Provider's default, then gemma.
+const envProvider = process.env.COMUX_PROVIDER;
+let provider: Provider | null = activeProvider(config);
+if (!envModel) model = config.model ?? provider?.model ?? model;
+setActiveProvider(provider);
 setDefaultModel(model);
 
 /** Pretty-print the chains and which Agent CLIs are present. */
@@ -242,7 +249,7 @@ const registry: Command[] = [
       await openComuxFile(arg, basename(arg), false);
     },
   },
-  { name: "/model", desc: "pick the Orchestrator model (ollama)", run: runModelPicker },
+  { name: "/model", desc: "pick the Orchestrator model (ollama / cloud)", run: runModelPicker },
   { name: "/setup", desc: "detect agents & write default chains", run: runSetupCmd },
   { name: "/settings", desc: "edit agent chains per capability", run: runSettingsPicker },
   { name: "/broadcast", desc: "edit broadcast roster (comux all send)", run: runBroadcastPicker },
@@ -416,28 +423,44 @@ async function runBroadcastPicker(): Promise<void> {
   say(c.green("  ✓ saved broadcast roster"));
 }
 
-/** /model — pick the Orchestrator model from the Ollama server and persist it. */
+/** /model — pick the Orchestrator backend: an Ollama model or a cloud Provider model (ADR-0025). */
 async function runModelPicker(): Promise<void> {
-  let models: string[];
+  type Choice = { provider: string; model: string };
+  const choices: Choice[] = [];
   try {
-    models = await listModels();
+    for (const m of await listModels()) choices.push({ provider: "ollama", model: m });
   } catch (e) {
     say(ui.warn(`Ollama ไม่ตอบ: ${(e as Error).message}`));
+  }
+  // Each cloud Provider's catalog (live when its key is present, else just its configured default).
+  for (const p of config.providers) {
+    for (const m of await listProviderModels(p)) choices.push({ provider: p.name, model: m });
+  }
+  if (!choices.length) { say(ui.warn("ไม่พบ model")); return; }
+
+  const curProv = provider?.name ?? "ollama";
+  const items = choices.map((ch) => ({
+    name: ch.model,
+    desc: ch.provider === curProv && ch.model === model ? `${ch.provider}  (current)` : ch.provider,
+  }));
+  const cur = choices.findIndex((ch) => ch.provider === curProv && ch.model === model);
+  const i = await tui.pickOne("Orchestrator provider / model", items, Math.max(0, cur));
+  if (i == null) return;
+
+  const chosen = choices[i]!;
+  config.model = chosen.model;
+  if (chosen.provider === "ollama") delete config.provider;
+  else config.provider = chosen.provider;
+  await saveConfig(config);
+  if (envModel || envProvider) {
+    say(ui.warn("saved แต่ env (COMUX_MODEL/COMUX_PROVIDER) ยัง override อยู่ — unset เพื่อใช้ค่าจาก config"));
     return;
   }
-  if (!models.length) { say(ui.warn("ไม่พบ model บน Ollama server")); return; }
-  const items = models.map((m) => ({ name: m, desc: m === model ? "(current)" : "" }));
-  const i = await tui.pickOne("Orchestrator model (ollama)", items, Math.max(0, models.indexOf(model)));
-  if (i == null) return;
-  config.model = models[i]!;
-  await saveConfig(config);
-  if (envModel) {
-    say(ui.warn(`saved แต่ COMUX_MODEL=${envModel} ใน env ยัง override อยู่ — unset env เพื่อใช้ค่าจาก config`));
-  } else {
-    model = config.model;
-    setDefaultModel(model);
-    say(ui.ok(`model → ${model}`));
-  }
+  provider = chosen.provider === "ollama" ? null : (config.providers.find((p) => p.name === chosen.provider) ?? null);
+  model = chosen.model;
+  setActiveProvider(provider);
+  setDefaultModel(model);
+  say(ui.ok(`model → ${chosen.provider}/${model}`));
 }
 
 for (;;) {

@@ -7,11 +7,11 @@ import { runTurn } from "@comux/harness.ts";
 import { harnessBus, type HarnessEvent, type GrillKind } from "@comux/harness-events.ts";
 import { createSay } from "@comux/harness-say.ts";
 import { collectAgentStatus, refreshAgentQuotas, type AgentQuotaView, type AgentStatusRow } from "@comux/agent-roster.ts";
-import { loadConfig, configExists, type Config, type Capability } from "@comux/config.ts";
+import { loadConfig, configExists, activeProvider, type Config, type Capability } from "@comux/config.ts";
 import { runSetup, detectAgents } from "@comux/setup.ts";
 import { startFeedWatcher } from "@comux/feed.ts";
 import { ensureWorkspace, readPlan, currentBranch, clearChatFiles } from "@comux/workspace.ts";
-import { lastStats, setDefaultModel } from "@comux/llm.ts";
+import { lastStats, setActiveProvider, setDefaultModel } from "@comux/llm.ts";
 import { c, ui } from "@comux/ui.ts";
 
 type GrillResolver = (value: boolean | number) => void;
@@ -61,9 +61,11 @@ export class DashboardSession {
       const setup = await runSetup();
       config = setup.config;
     }
-    const model = envModel ?? config.model ?? "gemma4:12b-mlx";
-    if (!envModel && config.model) setDefaultModel(config.model);
-    else setDefaultModel(model);
+    // ADR-0025: resolve the active Orchestrator Provider (null => native Ollama) and its model.
+    const provider = activeProvider(config);
+    const model = envModel ?? config.model ?? provider?.model ?? "gemma4:12b-mlx";
+    setActiveProvider(provider);
+    setDefaultModel(model);
     return new DashboardSession(workspace, config);
   }
 

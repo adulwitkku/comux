@@ -3,7 +3,7 @@
 // Re-running /setup rewrites the defaults; it does not merge over hand edits.
 
 import { AGENT_BINARIES } from "./agents.ts";
-import { DEFAULT_BROADCAST_ROSTER, DEFAULT_CHAINS, loadConfig, saveConfig, type Config } from "./config.ts";
+import { DEFAULT_BROADCAST_ROSTER, DEFAULT_CHAINS, DEFAULT_PROVIDERS, loadConfig, saveConfig, type Config } from "./config.ts";
 
 export interface AgentStatus {
   name: string;
@@ -53,6 +53,11 @@ export async function runSetup(): Promise<SetupResult> {
     chains: structuredClone(DEFAULT_CHAINS),
     bypass: true,
     broadcast: existing?.broadcast ?? { roster: structuredClone(DEFAULT_BROADCAST_ROSTER) },
+    // ADR-0025: pre-seed cloud Providers (Groq) but stay on Ollama until /model picks one.
+    // Preserve any the user has added/edited.
+    providers: existing?.providers ?? structuredClone(DEFAULT_PROVIDERS),
+    ...(existing?.provider ? { provider: existing.provider } : {}),
+    ...(existing?.model ? { model: existing.model } : {}),
   };
 
   const missing = new Set<string>();
